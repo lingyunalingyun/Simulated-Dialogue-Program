@@ -1,0 +1,17 @@
+# 运行数据：含 API key、聊天时间线、纠正记录、日志，绝不上传
+data/
+
+# 构建产物
+target/
+
+# IDE
+.idea/
+*.iml
+*.iws
+.vscode/
+
+# 编译类
+*.class
+
+# 打包用的辅助文件（用户协议等只进 MSI，不上仓库）
+build-resources/

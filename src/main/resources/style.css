@@ -1,0 +1,227 @@
+/* PersonaChat · 主题：mode（day/night）× accent（blue/pink/green/yellow/red/purple/custom） */
+
+.root {
+    -fx-font-family: "Microsoft YaHei UI", "Segoe UI", "PingFang SC", sans-serif;
+}
+
+/* ===================== 模式：白天 ===================== */
+.theme-day {
+    page-bg:           #EDF1F7;
+    card:              #FFFFFF;
+    line:              #DCE3ED;
+    ink:               #20293A;
+    ink-2:             #6B7585;
+    field-bg:          #F4F6FA;
+    bubble-think-bg:   #F1F4F9;
+    bubble-think-ink:  #5B6675;
+    narration-bg:      #E6EAF2;
+    narration-ink:     #7A8392;
+    meta-name-ink:     #9AA3B2;
+    meta-time-ink:     #B6BECB;
+    scroll-thumb:      #C2CCDC;
+    scroll-thumb-hover:#A7B4C9;
+    bubble-other-bg:   derive(accent, 82%);
+    field-focus-bg:    white;
+    btn-ghost-bg:      white;
+    btn-ghost-hover-bg:derive(accent, 90%);
+    btn-ghost-press-bg:derive(accent, 80%);
+    bubble-think-border-day-only: derive(accent, 70%);
+}
+
+/* ===================== 模式：黑夜 ===================== */
+.theme-night {
+    page-bg:           #15171D;
+    card:              #1E2128;
+    line:              #2B2F38;
+    ink:               #E5E8EE;
+    ink-2:             #8B92A0;
+    field-bg:          #181B22;
+    bubble-think-bg:   #20232B;
+    bubble-think-ink:  #9097A8;
+    narration-bg:      #1F2229;
+    narration-ink:     #8088A0;
+    meta-name-ink:     #6E7585;
+    meta-time-ink:     #525866;
+    scroll-thumb:      #3A3F4A;
+    scroll-thumb-hover:#4D5462;
+    bubble-other-bg:   derive(accent, -45%);
+    field-focus-bg:    #20232B;
+    btn-ghost-bg:      #232730;
+    btn-ghost-hover-bg:derive(accent, -55%);
+    btn-ghost-press-bg:derive(accent, -45%);
+    bubble-think-border-day-only: transparent;
+}
+
+/* ===================== 色调 ===================== */
+.accent-blue   { accent: #1C4FA0; accent-dark: #163E80; accent-bright: #2E6BD6; }
+.accent-pink   { accent: #D94B7A; accent-dark: #B53761; accent-bright: #EA6E96; }
+.accent-green  { accent: #2E9C5A; accent-dark: #23783F; accent-bright: #42BA72; }
+.accent-yellow { accent: #C9962A; accent-dark: #A47A1A; accent-bright: #E5B43F; }
+.accent-red    { accent: #C8404A; accent-dark: #A02A33; accent-bright: #E45A65; }
+.accent-purple { accent: #7B3FBF; accent-dark: #5E2E94; accent-bright: #9B5DDA; }
+/* accent-custom 不在 CSS 里写死，由 JavaFX 在 applyTheme() 用 setStyle 注入 */
+
+/* ===================== 基础布局 ===================== */
+.app-root, .content-root { -fx-background-color: page-bg; }
+
+/* ---------- 自定义标题栏 ---------- */
+.title-bar {
+    -fx-background-color: linear-gradient(to right, accent-dark, accent);
+    -fx-padding: 0 6 0 14;
+    -fx-min-height: 38; -fx-pref-height: 38;
+    -fx-alignment: center-left;
+}
+.title-text { -fx-text-fill: white; -fx-font-size: 13px; -fx-font-weight: bold; }
+.title-sub  { -fx-text-fill: derive(accent, 70%); -fx-font-size: 11px; }
+.win-btn {
+    -fx-background-color: transparent; -fx-text-fill: white; -fx-font-size: 14px;
+    -fx-min-width: 40; -fx-min-height: 38; -fx-cursor: hand; -fx-background-radius: 0;
+}
+.win-btn:hover  { -fx-background-color: rgba(255,255,255,0.18); }
+.win-close:hover { -fx-background-color: #E04757; }
+
+/* ---------- 工具栏 ---------- */
+.bar {
+    -fx-background-color: card; -fx-padding: 9 14 9 14; -fx-spacing: 8;
+    -fx-alignment: center-left; -fx-border-color: line; -fx-border-width: 0 0 1 0;
+}
+.bar-label { -fx-text-fill: ink-2; -fx-font-size: 12px; }
+
+.field {
+    -fx-background-color: field-bg; -fx-background-radius: 8;
+    -fx-border-color: line; -fx-border-radius: 8; -fx-padding: 6 10 6 10;
+    -fx-prompt-text-fill: derive(ink-2, 30%); -fx-text-fill: ink;
+}
+.field:focused { -fx-border-color: accent-bright; -fx-background-color: field-focus-bg; }
+
+.combo { -fx-background-color: field-bg; -fx-background-radius: 8; -fx-border-color: line; -fx-border-radius: 8; }
+.combo .list-cell { -fx-text-fill: ink; -fx-padding: 4 8 4 8; -fx-background-color: field-bg; }
+.combo .list-cell:filled:hover { -fx-background-color: derive(accent, 70%); -fx-text-fill: ink; }
+.combo .arrow { -fx-background-color: ink-2; }
+.combo:focused { -fx-border-color: accent-bright; }
+.combo-box-popup .list-view { -fx-background-color: card; -fx-border-color: line; }
+.combo-box-popup .list-view .list-cell { -fx-background-color: card; -fx-text-fill: ink; }
+.combo-box-popup .list-view .list-cell:filled:hover,
+.combo-box-popup .list-view .list-cell:filled:selected { -fx-background-color: derive(accent, 70%); -fx-text-fill: ink; }
+
+/* ---------- 按钮 ---------- */
+.btn {
+    -fx-background-color: accent; -fx-text-fill: white; -fx-font-size: 13px;
+    -fx-background-radius: 8; -fx-padding: 7 16 7 16; -fx-cursor: hand;
+}
+.btn:hover    { -fx-background-color: accent-bright; }
+.btn:pressed  { -fx-background-color: accent-dark; }
+.btn:disabled { -fx-opacity: 0.45; }
+
+.btn-ghost {
+    -fx-background-color: btn-ghost-bg; -fx-text-fill: accent; -fx-font-size: 13px;
+    -fx-background-radius: 8; -fx-border-color: line; -fx-border-radius: 8;
+    -fx-padding: 6 14 6 14; -fx-cursor: hand;
+}
+.btn-ghost:hover   { -fx-border-color: accent-bright; -fx-text-fill: accent-bright; -fx-background-color: btn-ghost-hover-bg; }
+.btn-ghost:pressed { -fx-background-color: btn-ghost-press-bg; }
+.btn-ghost:disabled { -fx-opacity: 0.45; }
+
+.status-label { -fx-text-fill: ink-2; -fx-font-size: 12px; }
+.corpus-label { -fx-text-fill: ink-2; -fx-font-size: 11px; }
+
+/* ---------- 底部控制区 ---------- */
+.controls {
+    -fx-background-color: card; -fx-padding: 10 14 10 14; -fx-spacing: 8;
+    -fx-border-color: line; -fx-border-width: 1 0 0 0;
+}
+
+/* ---------- 时间流逝表 ---------- */
+.clock-bar { -fx-background-color: linear-gradient(to right, accent-dark, accent-bright); -fx-padding: 7 14 7 14; }
+.clock-icon { -fx-text-fill: white; -fx-font-size: 14px; }
+.clock-time { -fx-text-fill: white; -fx-font-size: 15px; -fx-font-weight: bold; }
+.clock-period { -fx-text-fill: white; -fx-font-size: 12px; -fx-padding: 2 9 2 9; -fx-background-color: rgba(255,255,255,0.18); -fx-background-radius: 10; }
+.clock-rate { -fx-text-fill: derive(accent, 70%); -fx-font-size: 11px; }
+
+/* ---------- 中间聊天区 ---------- */
+.col-header-bar { -fx-background-color: field-bg; -fx-border-color: line; -fx-border-width: 0 0 1 0; }
+.col-header { -fx-font-size: 12px; -fx-text-fill: ink-2; -fx-font-weight: bold; -fx-padding: 8; }
+
+.chat-scroll, .chat-scroll .viewport { -fx-background-color: page-bg; }
+.chat-scroll { -fx-background-insets: 0; -fx-padding: 0; }
+.scroll-bar:vertical { -fx-background-color: transparent; -fx-pref-width: 10; }
+.scroll-bar:vertical .track { -fx-background-color: transparent; }
+.scroll-bar:vertical .thumb { -fx-background-color: scroll-thumb; -fx-background-radius: 6; }
+.scroll-bar:vertical .thumb:hover { -fx-background-color: scroll-thumb-hover; }
+.scroll-bar .increment-arrow, .scroll-bar .decrement-arrow,
+.scroll-bar .increment-button, .scroll-bar .decrement-button { -fx-pref-height: 0; -fx-padding: 0; }
+
+/* ---------- 气泡 ---------- */
+.bubble-other {
+    -fx-background-color: bubble-other-bg; -fx-text-fill: ink; -fx-background-radius: 13;
+    -fx-font-size: 14px; -fx-padding: 9 13 9 13;
+    -fx-border-color: transparent; -fx-border-radius: 13; -fx-border-width: 2;
+}
+.bubble-self {
+    -fx-background-color: accent; -fx-text-fill: white; -fx-background-radius: 13;
+    -fx-font-size: 14px; -fx-padding: 9 13 9 13;
+    -fx-border-color: transparent; -fx-border-radius: 13; -fx-border-width: 2;
+}
+.bubble-think {
+    -fx-background-color: bubble-think-bg; -fx-text-fill: bubble-think-ink; -fx-background-radius: 13;
+    -fx-font-size: 13px; -fx-font-style: italic; -fx-padding: 9 13 9 13;
+    -fx-border-color: transparent; -fx-border-radius: 13; -fx-border-width: 2;
+}
+.bubble-other.linked, .bubble-self.linked, .bubble-think.linked { -fx-border-color: accent-bright; }
+
+.meta-name { -fx-font-size: 11px; -fx-text-fill: meta-name-ink; }
+.meta-time { -fx-font-size: 10px; -fx-text-fill: meta-time-ink; }
+
+.flag-btn { -fx-background-color: transparent; -fx-text-fill: #C84A56; -fx-font-size: 11px; -fx-cursor: hand; -fx-padding: 2 4 2 4; }
+.flag-btn:hover { -fx-text-fill: #E04757; }
+
+/* 旁白 */
+.narration {
+    -fx-background-color: narration-bg; -fx-text-fill: narration-ink; -fx-font-style: italic;
+    -fx-background-radius: 9; -fx-font-size: 12px; -fx-padding: 6 14 6 14;
+}
+.narration-time { -fx-font-size: 10px; -fx-text-fill: meta-time-ink; }
+
+/* ---------- 对话框统一风格 ---------- */
+.themed-dialog, .themed-dialog .dialog-pane { -fx-background-color: card; }
+.themed-dialog .header-panel { -fx-background-color: card; -fx-border-color: line; -fx-border-width: 0 0 1 0; }
+.themed-dialog .header-panel .label { -fx-text-fill: ink; -fx-font-size: 14px; -fx-font-weight: bold; }
+.themed-dialog .content.label, .themed-dialog .label { -fx-text-fill: ink; }
+.themed-dialog .button-bar { -fx-background-color: card; }
+.themed-dialog .button-bar .button {
+    -fx-background-color: btn-ghost-bg; -fx-text-fill: accent;
+    -fx-background-radius: 8; -fx-border-color: line; -fx-border-radius: 8;
+    -fx-padding: 6 14 6 14; -fx-cursor: hand;
+}
+.themed-dialog .button-bar .button:hover { -fx-border-color: accent-bright; -fx-text-fill: accent-bright; -fx-background-color: btn-ghost-hover-bg; }
+.themed-dialog .button-bar .button:default {
+    -fx-background-color: accent; -fx-text-fill: white; -fx-border-color: transparent;
+}
+.themed-dialog .button-bar .button:default:hover { -fx-background-color: accent-bright; }
+.themed-dialog .text-area {
+    -fx-background-color: field-bg; -fx-background-radius: 8;
+    -fx-border-color: line; -fx-border-radius: 8;
+    -fx-text-fill: ink; -fx-control-inner-background: field-bg;
+}
+.themed-dialog .text-area .content { -fx-background-color: field-bg; }
+.themed-dialog .text-field {
+    -fx-background-color: field-bg; -fx-background-radius: 8;
+    -fx-border-color: line; -fx-border-radius: 8; -fx-padding: 6 10 6 10;
+    -fx-prompt-text-fill: derive(ink-2, 30%); -fx-text-fill: ink;
+}
+
+/* ---------- 主题选择器：色块 ---------- */
+.swatch {
+    -fx-min-width: 32; -fx-min-height: 32; -fx-pref-width: 32; -fx-pref-height: 32;
+    -fx-background-radius: 16; -fx-border-radius: 16;
+    -fx-border-color: transparent; -fx-border-width: 2;
+    -fx-cursor: hand;
+}
+.swatch:hover { -fx-border-color: ink-2; }
+.swatch.selected { -fx-border-color: ink; -fx-border-width: 3; }
+.swatch-blue   { -fx-background-color: #1C4FA0; }
+.swatch-pink   { -fx-background-color: #D94B7A; }
+.swatch-green  { -fx-background-color: #2E9C5A; }
+.swatch-yellow { -fx-background-color: #C9962A; }
+.swatch-red    { -fx-background-color: #C8404A; }
+.swatch-purple { -fx-background-color: #7B3FBF; }
