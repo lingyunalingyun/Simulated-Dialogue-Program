@@ -43,7 +43,7 @@ public class App extends Application {
     private static final String APP_VERSION = "1.1.1";
     private static final String APP_NAME = "LanHing-VirtualChat";
     private static final String UPDATE_API =
-            "https://api.github.com/repos/lingyunalingyun/Simulated-dialogue-program/releases/latest";
+            "https://api.github.com/repos/lingyunalingyun/LanHing-VirtualChat-Program/releases/latest";
     private boolean seenGuide = false;             // 首次启动引导：true 表示已看过
     private boolean autoUpdate = true;             // true=新版自动下载安装；false=小版本只通知，大版本仍强制
 
@@ -247,7 +247,7 @@ public class App extends Application {
                 String tag = o.optString("tag_name", "").replaceFirst("^v", "");
                 if (tag.isEmpty() || compareVersion(tag, APP_VERSION) <= 0) return;
                 String name = o.optString("name", "v" + tag);
-                String html = o.optString("html_url", "https://github.com/lingyunalingyun/Simulated-dialogue-program/releases");
+                String html = o.optString("html_url", "https://github.com/lingyunalingyun/LanHing-VirtualChat-Program/releases");
                 String body = o.optString("body", "");
                 String msiUrl = findMsiAssetUrl(o);
                 boolean major = isMajorBump(tag, APP_VERSION);
@@ -2111,7 +2111,7 @@ public class App extends Application {
         openReleasesBtn.getStyleClass().add("btn-ghost");
         openReleasesBtn.setVisible(false);
         openReleasesBtn.setManaged(false);
-        String[] latestUrl = { "https://github.com/lingyunalingyun/Simulated-dialogue-program/releases" };
+        String[] latestUrl = { "https://github.com/lingyunalingyun/LanHing-VirtualChat-Program/releases" };
         openReleasesBtn.setOnAction(e -> openInBrowser(latestUrl[0]));
         checkBtn.setOnAction(e -> {
             checkBtn.setDisable(true);
@@ -2119,7 +2119,8 @@ public class App extends Application {
             new Thread(() -> {
                 try {
                     java.net.http.HttpClient c = java.net.http.HttpClient.newBuilder()
-                            .connectTimeout(java.time.Duration.ofSeconds(8)).build();
+                            .connectTimeout(java.time.Duration.ofSeconds(8))
+                            .followRedirects(java.net.http.HttpClient.Redirect.NORMAL).build();
                     java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(java.net.URI.create(UPDATE_API))
                             .header("Accept", "application/vnd.github+json")
                             .header("User-Agent", "LanHing-VirtualChat-Updater")
@@ -2160,7 +2161,7 @@ public class App extends Application {
 
         Button repoBtn = new Button("打开 GitHub 仓库");
         repoBtn.getStyleClass().add("btn-ghost");
-        repoBtn.setOnAction(e -> openInBrowser("https://github.com/lingyunalingyun/Simulated-dialogue-program"));
+        repoBtn.setOnAction(e -> openInBrowser("https://github.com/lingyunalingyun/LanHing-VirtualChat-Program"));
 
         // ===== 人设段 =====
         Label personasHint = new Label("当前时间线「" + currentTimeline + "」的双方人设档案");
