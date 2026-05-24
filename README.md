@@ -1,18 +1,18 @@
-# PersonaChat · 双 AI 对话模拟器
+# LanHing-VirtualChat · 双 AI 对话模拟器
 
 让**两个基于真实人设的 AI** 在一条连续流动的时间线上互相私聊——你导入双方的「人设档案」、设定他们当前的关系，然后看他们在某种可能里如何相处。你可以审核、肯定、否定、逐句纠正，让对话越来越像真人。
 
-> 桌面应用，JavaFX + DeepSeek。所有数据只存在本地，绝不上传。
+> 桌面应用，JavaFX + 任意 OpenAI 兼容服务（DeepSeek/OpenAI/Moonshot/Zhipu/Qwen/Gemini/OpenRouter/SiliconFlow…）。所有数据只存在本地，绝不上传。
 
 <p align="center">
-  <img src="src/main/resources/icon.png" width="120" alt="PersonaChat logo">
+  <img src="src/main/resources/icon.png" width="120" alt="LanHing-VirtualChat logo">
 </p>
 
 ---
 
 ## ✨ 特性
 
-- **双 AI 私聊**：左右两套人设各跑一个 DeepSeek 实例，微信式聊天窗。
+- **双 AI 私聊**：左右两套人设各跑一个 LLM 实例（任意 OpenAI 兼容服务），微信式聊天窗。
 - **🕐 连续时间流逝表 + 可调流速**：顶部时钟匀速 N× 一直走（1× / 2× / 4× / 8× / 16× / 20× 可选），AI 自己决定**每句话在未来哪个时刻冒出来、能多久不回**——不强制一来一回，可以一个人连发、另一个半天不说；起始时刻可调（默认 21:00）。
 - **💬 连发多气泡**：AI 输出的换行被自动拆成多个气泡，每条错开 5-25 模拟秒揭示，复刻真人「叮叮叮」连发感。
 - **🚶 离开事件触发**：AI 说要去做某事（画画 / 睡觉 / 打游戏 / 吃饭 …），系统自动插入旁白「X 去 Y 了」+ 按活动类型估算时间跳分钟（睡 7-10h / 画画 30-90min / 游戏 25-60min / …）+ X 回来后接话。
@@ -34,8 +34,8 @@
 
 ## 🚀 快速开始（普通用户）
 
-1. 到 [Releases](../../releases) 下载最新的 `PersonaChat-windows.zip`，解压。
-2. 双击 `PersonaChat.exe` 运行（已内置运行环境，**无需安装 Java**）。
+1. 到 [Releases](../../releases) 下载最新的 `LanHing-VirtualChat-windows.zip`，解压。
+2. 双击 `LanHing-VirtualChat.exe` 运行（已内置运行环境，**无需安装 Java**）。
 3. 顶栏填入你的 **DeepSeek API Key** → 点「保存」。
    （去 https://platform.deepseek.com 申请，按量付费很便宜。）
 4. 准备两份人设档案 → 见下方「完整教程」。
@@ -156,13 +156,13 @@ mvn javafx:run          # 直接运行
 mvn -o dependency:copy-dependencies -DoutputDirectory=target/libs
 mvn -o package
 # 2. 用 jpackage 生成 app-image（内置 JRE）
-jpackage --type app-image --name PersonaChat \
-  --input target/libs --main-jar PersonaChat-1.0-SNAPSHOT.jar \
+jpackage --type app-image --name LanHing-VirtualChat \
+  --input target/libs --main-jar LanHing-VirtualChat-1.0-SNAPSHOT.jar \
   --main-class org.example.personachat.Launcher \
   --icon src/main/resources/icon.png \
   --dest target/dist
 ```
-生成的 `target/dist/PersonaChat/` 整个打包成 zip 即可发布。
+生成的 `target/dist/LanHing-VirtualChat/` 整个打包成 zip 即可发布。
 
 ### 代码结构
 ```

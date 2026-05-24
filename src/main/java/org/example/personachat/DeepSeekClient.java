@@ -10,14 +10,15 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 
-/** 调用 DeepSeek 的 chat/completions（OpenAI 兼容）。 */
+/** 通用 OpenAI 兼容 chat/completions 客户端。市面上大多数厂家（DeepSeek/OpenAI/Moonshot/Zhipu/Qwen/Gemini/OpenRouter/SiliconFlow…）都提供此协议。 */
 public class DeepSeekClient {
     private static final HttpClient HTTP = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(20))
             .build();
-    private static final String URL = "https://api.deepseek.com/chat/completions";
+    private static final String DEFAULT_URL = "https://api.deepseek.com/chat/completions";
 
-    public static String chat(String apiKey, String model, JSONArray messages) throws Exception {
+    public static String chat(String apiUrl, String apiKey, String model, JSONArray messages) throws Exception {
+        String url = (apiUrl == null || apiUrl.isBlank()) ? DEFAULT_URL : apiUrl.trim();
         JSONObject body = new JSONObject()
                 .put("model", model)
                 .put("messages", messages)
@@ -25,14 +26,14 @@ public class DeepSeekClient {
                 .put("max_tokens", 400)
                 .put("stream", false);
 
-        HttpRequest req = HttpRequest.newBuilder(URI.create(URL))
+        HttpRequest req = HttpRequest.newBuilder(URI.create(url))
                 .timeout(Duration.ofSeconds(90))
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + apiKey)
                 .POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8))
                 .build();
 
-        Log.w("API", "POST model=" + model + " msgs=" + messages.length());
+        Log.w("API", "POST " + url + " model=" + model + " msgs=" + messages.length());
         HttpResponse<String> resp = HTTP.send(req,
                 HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         if (resp.statusCode() != 200) {

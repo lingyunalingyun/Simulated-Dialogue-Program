@@ -40,6 +40,28 @@ public class App extends Application {
     private static final int WINDOW = 40;          // 只喂模型最近 N 条
     private static final int ROUNDS = 10;          // 一批 10 个来回
     private static final int LEAVE_DELAY = 1;      // 有人说要离开后，再过几条触发事件旁白
+    private static final String APP_VERSION = "1.1.1";
+    private static final String APP_NAME = "LanHing-VirtualChat";
+    private static final String UPDATE_API =
+            "https://api.github.com/repos/lingyunalingyun/Simulated-dialogue-program/releases/latest";
+    private boolean seenGuide = false;             // 首次启动引导：true 表示已看过
+    private boolean autoUpdate = true;             // true=新版自动下载安装；false=小版本只通知，大版本仍强制
+
+    // ---------- API 服务商（OpenAI 兼容）----------
+    private record Provider(String name, String url, String defaultModel) {}
+    private static final List<Provider> PROVIDERS = List.of(
+            new Provider("DeepSeek",             "https://api.deepseek.com/chat/completions",                                "deepseek-chat"),
+            new Provider("OpenAI",               "https://api.openai.com/v1/chat/completions",                               "gpt-4o-mini"),
+            new Provider("Moonshot Kimi",        "https://api.moonshot.cn/v1/chat/completions",                              "moonshot-v1-8k"),
+            new Provider("Zhipu 智谱 GLM",        "https://open.bigmodel.cn/api/paas/v4/chat/completions",                    "glm-4-flash"),
+            new Provider("Qwen 通义",             "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",       "qwen-turbo"),
+            new Provider("Google Gemini",        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-1.5-flash"),
+            new Provider("OpenRouter",           "https://openrouter.ai/api/v1/chat/completions",                            "deepseek/deepseek-chat"),
+            new Provider("SiliconFlow 硅基流动",  "https://api.siliconflow.cn/v1/chat/completions",                           "deepseek-ai/DeepSeek-V2.5"),
+            new Provider("自定义",                "",                                                                          "")
+    );
+    private String apiProvider = "DeepSeek";
+    private String apiUrl = "https://api.deepseek.com/chat/completions";
 
     private record Gen(String think, String msg, String leave, int gap, Conversation.Who next) {}
     private record Director(String transition, String next, int skipMinutes) {}
@@ -98,7 +120,8 @@ public class App extends Application {
     private final Label corpusLabel = new Label("");
     private final Label clockLabel = new Label("第1天 21:00");
     private final Label clockPeriod = new Label("晚上");
-    private final TextField relationField = new TextField();   // 当前双方关系（可手动改、注入）
+    private final TextField relationField = new TextField();   // 当前双方关系（数据持有，UI 不展示编辑器）
+    private final Label relationChip = new Label();             // 只读 chip：显示当前关系
     private Label titleSub;
     private String runRelation = "";
     private String corpusPath = "", corpusLeft = "", corpusRight = "";   // 可选语料：jsonl 路径 + 双方 accountName
@@ -130,7 +153,7 @@ public class App extends Application {
         Stage splash = showSplash();
         BorderPane content = new BorderPane();
         content.getStyleClass().add("content-root");
-        content.setTop(new VBox(buildSettingsBar(), buildTimelineBar(), buildScenarioBar(), buildRelationBar()));
+        content.setTop(new VBox(buildTimelineBar(), buildScenarioBar(), buildRelationBar()));
         content.setCenter(buildCenter());
         content.setBottom(buildControls());
 
@@ -174,7 +197,7 @@ public class App extends Application {
         Scene scene = new Scene(root, 1180, 860);
         scene.getStylesheets().add(getClass().getResource("/style.css").toExternalForm());
         applyTheme();
-        stage.setTitle("PersonaChat");
+        stage.setTitle(APP_NAME);
         try {
             // 多分辨率塞进 getIcons()，让 Windows 任务栏/Alt-Tab 自动挑合适的
             Image icon = new Image(getClass().getResourceAsStream("/icon.png"));
@@ -189,13 +212,198 @@ public class App extends Application {
             if (splash != null) {
                 javafx.animation.FadeTransition fo = new javafx.animation.FadeTransition(Duration.millis(300), splash.getScene().getRoot());
                 fo.setFromValue(1); fo.setToValue(0);
-                fo.setOnFinished(ev -> { splash.close(); stage.show(); });
+                fo.setOnFinished(ev -> { splash.close(); stage.show(); maybeShowFirstRunGuide(); });
                 fo.play();
             } else {
                 stage.show();
+                maybeShowFirstRunGuide();
             }
         });
         hold.play();
+    }
+
+    private void maybeShowFirstRunGuide() {
+        if (!seenGuide) {
+            Platform.runLater(() -> showFirstRunGuide(false));
+        }
+        // 启动时静默检查更新；有新版本就强制弹窗
+        autoCheckUpdate();
+    }
+
+    /** 启动后台检查更新；连不上 GitHub 静默跳过。 */
+    private void autoCheckUpdate() {
+        new Thread(() -> {
+            try {
+                java.net.http.HttpClient c = java.net.http.HttpClient.newBuilder()
+                        .connectTimeout(java.time.Duration.ofSeconds(6))
+                        .followRedirects(java.net.http.HttpClient.Redirect.NORMAL).build();
+                java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(java.net.URI.create(UPDATE_API))
+                        .header("Accept", "application/vnd.github+json")
+                        .header("User-Agent", "LanHing-VirtualChat-Updater")
+                        .timeout(java.time.Duration.ofSeconds(8))
+                        .GET().build();
+                java.net.http.HttpResponse<String> resp = c.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
+                JSONObject o = new JSONObject(resp.body());
+                String tag = o.optString("tag_name", "").replaceFirst("^v", "");
+                if (tag.isEmpty() || compareVersion(tag, APP_VERSION) <= 0) return;
+                String name = o.optString("name", "v" + tag);
+                String html = o.optString("html_url", "https://github.com/lingyunalingyun/Simulated-dialogue-program/releases");
+                String body = o.optString("body", "");
+                String msiUrl = findMsiAssetUrl(o);
+                boolean major = isMajorBump(tag, APP_VERSION);
+                Log.w("UPDATE", "远端 v" + tag + "（本地 v" + APP_VERSION + "）major=" + major
+                        + " autoUpdate=" + autoUpdate + " msi=" + (msiUrl == null ? "(无)" : "ok"));
+                Platform.runLater(() -> {
+                    if (major || autoUpdate) {
+                        // 大版本必更新 / 开了自动更新 → 走带进度条的自动下载流程
+                        showAutoUpdateDialog(tag, name, body, html, msiUrl, major);
+                    } else {
+                        // 小版本+用户关了自动更新 → 仅通知，提供链接
+                        showUpdateNotice(tag, name, html, body);
+                    }
+                });
+            } catch (Exception e) {
+                Log.w("UPDATE", "自动检查失败（静默）：" + e.getMessage());
+            }
+        }, "update-autocheck").start();
+    }
+
+    /** 从 release JSON 的 assets[] 里找 .msi 资产的下载 URL。找不到返回 null。 */
+    private static String findMsiAssetUrl(JSONObject release) {
+        try {
+            JSONArray arr = release.optJSONArray("assets");
+            if (arr == null) return null;
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject a = arr.getJSONObject(i);
+                String n = a.optString("name", "");
+                if (n.toLowerCase().endsWith(".msi")) return a.optString("browser_download_url", null);
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    /** 大版本判断：首段不等且远端 > 本地。 */
+    private static boolean isMajorBump(String remote, String local) {
+        String[] r = remote.split("\\.");
+        String[] l = local.split("\\.");
+        int rm = 0, lm = 0;
+        try { rm = Integer.parseInt(r[0].replaceAll("[^0-9]", "")); } catch (Exception ignored) {}
+        try { lm = Integer.parseInt(l[0].replaceAll("[^0-9]", "")); } catch (Exception ignored) {}
+        return rm > lm;
+    }
+
+    /** 小版本+autoUpdate=off：单一"通知"弹窗，去浏览器看。 */
+    private void showUpdateNotice(String tag, String name, String html, String body) {
+        Dialog<Void> d = new Dialog<>();
+        d.setTitle("有新版本可下载");
+        d.setHeaderText("✨ 新版本 v" + tag + "（当前 v" + APP_VERSION + "）· 自动更新已关，仅通知");
+        Label nm = new Label(name);
+        nm.setStyle("-fx-font-size: 14px; -fx-font-weight: bold;");
+        TextArea notes = new TextArea(body.isEmpty() ? "（无更新说明）" : body);
+        notes.setEditable(false); notes.setWrapText(true);
+        notes.setPrefRowCount(10); notes.setPrefColumnCount(56);
+        VBox box = new VBox(8, nm, new Label("更新说明："), notes);
+        box.setPrefWidth(540);
+        d.getDialogPane().setContent(box);
+        ButtonType go = new ButtonType("前往下载", ButtonBar.ButtonData.OK_DONE);
+        ButtonType later = new ButtonType("稍后再说", ButtonBar.ButtonData.CANCEL_CLOSE);
+        d.getDialogPane().getButtonTypes().addAll(go, later);
+        themeDialog(d);
+        d.setResultConverter(bt -> { if (bt == go) openInBrowser(html); return null; });
+        d.showAndWait();
+    }
+
+    /** 自动更新弹窗：带 ProgressBar 拉取 MSI；下载完启动 msiexec + 退出本进程。 */
+    private void showAutoUpdateDialog(String tag, String name, String body, String html,
+                                      String msiUrl, boolean major) {
+        Dialog<Void> d = new Dialog<>();
+        d.setTitle(major ? "🔴 重要更新 · 必须升级" : "✨ 新版本");
+        d.setHeaderText((major ? "🔴 重要更新 v" : "✨ 新版本 v") + tag + "（当前 v" + APP_VERSION + "）");
+        Label nm = new Label(name);
+        nm.setStyle("-fx-font-size: 14px; -fx-font-weight: bold;");
+        TextArea notes = new TextArea(body.isEmpty() ? "（无更新说明）" : body);
+        notes.setEditable(false); notes.setWrapText(true);
+        notes.setPrefRowCount(8); notes.setPrefColumnCount(56);
+        ProgressBar progress = new ProgressBar(0);
+        progress.setPrefWidth(480);
+        Label progressLbl = new Label(msiUrl == null
+                ? "⚠️ 此次发布没有 .msi 资产，无法自动下载，请前往下载页手动安装。"
+                : "点击「立即更新」开始下载 MSI 安装包");
+
+        Button downloadBtn = new Button("立即更新");
+        downloadBtn.getStyleClass().add("btn");
+        Button openWebBtn = new Button("前往下载页");
+        openWebBtn.getStyleClass().add("btn-ghost");
+        openWebBtn.setOnAction(e -> openInBrowser(html));
+        Button laterBtn = new Button(major ? "稍后（重启再提醒）" : "暂不更新");
+        laterBtn.getStyleClass().add("btn-ghost");
+        laterBtn.setOnAction(e -> d.close());
+        if (msiUrl == null) downloadBtn.setDisable(true);
+        downloadBtn.setOnAction(e -> {
+            downloadBtn.setDisable(true);
+            laterBtn.setDisable(true);
+            new Thread(() -> doDownloadAndInstall(msiUrl, progress, progressLbl), "update-dl").start();
+        });
+        HBox btns = new HBox(8, downloadBtn, openWebBtn, laterBtn);
+        VBox box = new VBox(10, nm, new Label("更新说明："), notes, progress, progressLbl, btns);
+        box.setPrefWidth(540);
+        d.getDialogPane().setContent(box);
+        // 必须有 CLOSE 让 ESC 工作；隐藏
+        d.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        Node closeNode = d.getDialogPane().lookupButton(ButtonType.CLOSE);
+        if (closeNode != null) { closeNode.setVisible(false); closeNode.setManaged(false); }
+        themeDialog(d);
+        d.showAndWait();
+    }
+
+    /** 实际下载 + 安装：BodyHandlers.ofInputStream 边读边写文件并刷新进度。完成后启动 msiexec 并 Platform.exit。 */
+    private void doDownloadAndInstall(String msiUrl, ProgressBar progress, Label statusLbl) {
+        try {
+            Platform.runLater(() -> statusLbl.setText("连接服务器…"));
+            java.nio.file.Path tmp = java.nio.file.Files.createTempFile("LanHing-Update-", ".msi");
+            java.net.http.HttpClient c = java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(java.time.Duration.ofSeconds(15))
+                    .followRedirects(java.net.http.HttpClient.Redirect.NORMAL).build();
+            java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(java.net.URI.create(msiUrl))
+                    .header("User-Agent", "LanHing-VirtualChat-Updater")
+                    .timeout(java.time.Duration.ofMinutes(10))
+                    .GET().build();
+            java.net.http.HttpResponse<java.io.InputStream> resp = c.send(req,
+                    java.net.http.HttpResponse.BodyHandlers.ofInputStream());
+            long total = resp.headers().firstValueAsLong("Content-Length").orElse(-1);
+            long downloaded = 0;
+            try (java.io.InputStream in = resp.body();
+                 java.io.OutputStream out = java.nio.file.Files.newOutputStream(tmp)) {
+                byte[] buf = new byte[32 * 1024];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    out.write(buf, 0, n);
+                    downloaded += n;
+                    final long d = downloaded;
+                    final long t = total;
+                    Platform.runLater(() -> {
+                        if (t > 0) {
+                            progress.setProgress((double) d / t);
+                            statusLbl.setText(String.format("下载中… %.1f / %.1f MB", d / 1048576.0, t / 1048576.0));
+                        } else {
+                            statusLbl.setText(String.format("下载中… %.1f MB", d / 1048576.0));
+                        }
+                    });
+                }
+            }
+            Log.w("UPDATE", "下载完成 " + downloaded + " 字节 → " + tmp);
+            Platform.runLater(() -> {
+                progress.setProgress(1.0);
+                statusLbl.setText("✅ 下载完成，正在启动安装程序…");
+            });
+            Thread.sleep(800);
+            new ProcessBuilder("msiexec", "/i", tmp.toString()).start();
+            // 让安装程序接管；本进程退出，释放文件占用
+            Platform.runLater(() -> { saveTimeline(); saveMeta(); Platform.exit(); });
+        } catch (Exception e) {
+            Log.err("UPDATE", e);
+            Platform.runLater(() -> statusLbl.setText("❌ 失败：" + e.getMessage() + "（可手动前往下载页）"));
+        }
     }
 
     /** 启动 splash：无边框透明窗，居中 logo + 名字，渐显。 */
@@ -203,7 +411,7 @@ public class App extends Application {
         try {
             Stage sp = new Stage(StageStyle.TRANSPARENT);
             ImageView logo = new ImageView(new Image(getClass().getResourceAsStream("/icon.png"), 180, 180, true, true));
-            Label name = new Label("PersonaChat");
+            Label name = new Label(APP_NAME);
             name.setStyle("-fx-text-fill: white; -fx-font-size: 24px; -fx-font-weight: bold;" +
                     "-fx-font-family: 'Microsoft YaHei UI', 'Segoe UI', sans-serif;");
             Label sub = new Label("双 AI 对话模拟");
@@ -248,12 +456,15 @@ public class App extends Application {
         } catch (Exception e) {
             logo = new ImageView();
         }
-        Label title = new Label("PersonaChat");
+        Label title = new Label(APP_NAME);
         title.getStyleClass().add("title-text");
         titleSub = new Label("· 双 AI 对话模拟");
         titleSub.getStyleClass().add("title-sub");
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
+        Button settings = new Button("⚙");
+        settings.getStyleClass().add("win-btn");
+        settings.setOnAction(e -> showSettingsDialog());
         Button theme = new Button("🎨");
         theme.getStyleClass().add("win-btn");
         theme.setOnAction(e -> showThemeDialog());
@@ -263,7 +474,7 @@ public class App extends Application {
         Button close = new Button("✕");
         close.getStyleClass().addAll("win-btn", "win-close");
         close.setOnAction(e -> { saveTimeline(); saveMeta(); Platform.exit(); });
-        HBox bar = new HBox(8, logo, title, titleSub, spacer, theme, min, close);
+        HBox bar = new HBox(8, logo, title, titleSub, spacer, settings, theme, min, close);
         bar.getStyleClass().add("title-bar");
         bar.setAlignment(Pos.CENTER_LEFT);
         bar.setOnMousePressed(e -> { dragX = e.getScreenX() - stage.getX(); dragY = e.getScreenY() - stage.getY(); });
@@ -279,26 +490,7 @@ public class App extends Application {
         return l;
     }
 
-    private Node buildSettingsBar() {
-        keyField.setPromptText("DeepSeek API Key");
-        keyField.setPrefWidth(180);
-        keyField.getStyleClass().add("field");
-        modelField.setPrefWidth(100);
-        modelField.getStyleClass().add("field");
-        Button save = new Button("保存");
-        save.getStyleClass().add("btn-ghost");
-        save.setOnAction(e -> saveConfig());
-        Button impLeft = new Button("导入左边人设");
-        impLeft.getStyleClass().add("btn-ghost");
-        impLeft.setOnAction(e -> importPersona(true));
-        Button impRight = new Button("导入右边人设");
-        impRight.getStyleClass().add("btn-ghost");
-        impRight.setOnAction(e -> importPersona(false));
-        corpusLabel.getStyleClass().add("corpus-label");
-        HBox bar = new HBox(barLabel("Key"), keyField, barLabel("模型"), modelField, save, impLeft, impRight, corpusLabel);
-        bar.getStyleClass().add("bar");
-        return bar;
-    }
+    // 顶部 settingsBar 已删除 —— Key/模型/服务商现在都在 ⚙ 设置对话框里。
 
     /** 时间线栏：切换/新建/重命名/删除。 */
     private Node buildTimelineBar() {
@@ -324,13 +516,14 @@ public class App extends Application {
         return bar;
     }
 
-    /** 当前双方关系栏（常驻、可手动改、生成时注入）。 */
+    /** 当前关系栏：只读 chip，初始在创建时间线时填，之后由 AI 巡视对话自动更新。 */
     private Node buildRelationBar() {
-        relationField.setPromptText("当前两人的关系/所处阶段，如：高中同学，刚表白在一起第1天…（开始前可改）");
-        relationField.getStyleClass().add("field");
-        HBox.setHgrow(relationField, Priority.ALWAYS);
-        relationField.focusedProperty().addListener((o, was, is) -> { if (was && !is) savePrefs(); });
-        HBox bar = new HBox(8, barLabel("当前关系"), relationField);
+        relationChip.textProperty().bind(relationField.textProperty().map(s ->
+                s == null || s.isBlank() ? "（未设定 · 新建时间线时可指定）" : s));
+        relationChip.getStyleClass().add("relation-chip");
+        Label hint = new Label("🤖 AI 会随对话自动调整");
+        hint.getStyleClass().add("status-label");
+        HBox bar = new HBox(10, barLabel("当前关系"), relationChip, hint);
         bar.getStyleClass().add("bar");
         bar.setAlignment(Pos.CENTER_LEFT);
         return bar;
@@ -474,9 +667,6 @@ public class App extends Application {
         posBtn = new Button("👍肯定");
         posBtn.getStyleClass().add("btn-ghost");
         posBtn.setOnAction(e -> feedbackRound(true));
-        Button viewStyleBtn = new Button("📋查看总结");
-        viewStyleBtn.getStyleClass().add("btn-ghost");
-        viewStyleBtn.setOnAction(e -> showStyleSummary());
 
         interField.setPromptText("插一句话…");
         interField.getStyleClass().add("field");
@@ -492,7 +682,7 @@ public class App extends Application {
         narrBtn.setOnAction(e -> interject(Conversation.Who.NARRATION));
         status.getStyleClass().add("status-label");
 
-        HBox row1 = new HBox(8, genBtn, contBtn, stopBtn, clearBtn, negBtn, posBtn, viewStyleBtn);
+        HBox row1 = new HBox(8, genBtn, contBtn, stopBtn, clearBtn, negBtn, posBtn);
         row1.setAlignment(Pos.CENTER_LEFT);
         HBox row2 = new HBox(8, interField, leftBtn, rightBtn, narrBtn);
         row2.setAlignment(Pos.CENTER_LEFT);
@@ -570,7 +760,7 @@ public class App extends Application {
                 msgs.put(new JSONObject().put("role", "system").put("content", sys));
                 msgs.put(new JSONObject().put("role", "user").put("content",
                         "【" + nameOther + " 人设】\n" + plx.skillText() + "\n\n【" + nameSelf + " 人设】\n" + ly.skillText()));
-                String raw = DeepSeekClient.chat(key, model, msgs);
+                String raw = DeepSeekClient.chat(apiUrl, key, model, msgs);
                 String firstStr = section(raw, "【先说】", "【心理】");
                 String think = clean(section(raw, "【心理】", "【消息】"));
                 String msg = stripActions(clean(section(raw, "【消息】", null)));
@@ -822,6 +1012,60 @@ public class App extends Application {
         status.setText(msg);
         saveTimeline();
         Log.w("RUN", "停止：" + msg + " 历史=" + convo.turns().size() + "条");
+        if (producedCount > 0) checkRelationDrift();
+    }
+
+    private volatile boolean relationCheckBusy = false;
+
+    /** AI 巡视：取最近对话片段判断当前关系是否需要更新。变了就 setText+saveMeta，否则静默。 */
+    private void checkRelationDrift() {
+        if (relationCheckBusy) return;
+        if (!personasReady) return;
+        String key = keyField.getText().trim();
+        if (key.isEmpty()) return;
+        String model = modelField.getText().trim().isEmpty() ? "deepseek-chat" : modelField.getText().trim();
+        List<Conversation.Turn> ts = convo.turns();
+        if (ts.size() < 6) return;
+        relationCheckBusy = true;
+        final String currentRel = relationField.getText().trim();
+        final String url = apiUrl;
+        new Thread(() -> {
+            try {
+                StringBuilder dlg = new StringBuilder();
+                int from = Math.max(0, ts.size() - 30);
+                for (int i = from; i < ts.size(); i++) {
+                    dlg.append(name(ts.get(i).who())).append("：").append(ts.get(i).text()).append("\n");
+                }
+                String sys = "你是关系评估器。" + nameOther + " 和 " + nameSelf
+                        + " 当前记录的关系是：「" + (currentRel.isEmpty() ? "(未设定)" : currentRel) + "」。"
+                        + "下面是他俩最近的对话。基于这段对话，判断他俩此刻的关系/亲密度/状态是否发生了实质变化"
+                        + "（比如：从生疏变熟、变近、变远、吵架、和好、表白、分手、有第三者出现等）。\n"
+                        + "若有变化：只输出一行新的关系描述（不超过 30 字，例：「在一起 1 周，更黏了」「冷战中，互相不爱搭理」）。\n"
+                        + "若没变化：只输出 SAME。\n"
+                        + "只输出这一行，不要任何别的字。";
+                JSONArray msgs = new JSONArray();
+                msgs.put(new JSONObject().put("role", "system").put("content", sys));
+                msgs.put(new JSONObject().put("role", "user").put("content", dlg.toString()));
+                String raw = DeepSeekClient.chat(url, key, model, msgs).trim();
+                String first = raw.split("\\r?\\n")[0].trim().replaceAll("^[\"「『]+|[\"」』]+$", "");
+                if (first.isEmpty() || first.equalsIgnoreCase("SAME") || first.equals(currentRel)) {
+                    Log.w("RELATION", "无变化（" + Log.cut(raw, 40) + "）");
+                    return;
+                }
+                if (first.length() > 60) first = first.substring(0, 60);
+                final String newRel = first;
+                Platform.runLater(() -> {
+                    relationField.setText(newRel);
+                    saveMeta();
+                    status.setText("🤖 关系已更新：" + newRel);
+                    Log.w("RELATION", "更新：「" + Log.cut(currentRel, 30) + "」→「" + newRel + "」");
+                });
+            } catch (Exception e) {
+                Log.w("RELATION", "检查失败：" + e.getMessage());
+            } finally {
+                relationCheckBusy = false;
+            }
+        }, "relation-check").start();
     }
 
     /** 处理"离开去做某事"事件：到点后插入事件旁白 + 导演时间过渡。 */
@@ -891,7 +1135,7 @@ public class App extends Application {
         }
         msgs.put(new JSONObject().put("role", "user").put("content", ctx.toString()));
         try {
-            String raw = DeepSeekClient.chat(key, model, msgs);
+            String raw = DeepSeekClient.chat(apiUrl, key, model, msgs);
             String trans = section(raw, "【过渡旁白】", "【先说】");
             String next = section(raw, "【先说】", "【跳分钟】");
             String mins = section(raw, "【跳分钟】", null).replaceAll("[^0-9]", "");
@@ -917,7 +1161,7 @@ public class App extends Application {
         JSONArray msgs = convo.buildMessages(system, who, WINDOW);
         String raw = "";
         for (int attempt = 1; attempt <= 3 && !stopReq; attempt++) {
-            raw = DeepSeekClient.chat(key, model, msgs);
+            raw = DeepSeekClient.chat(apiUrl, key, model, msgs);
             if (!raw.isBlank()) break;
             Log.w("GEN", name(who) + " 第" + attempt + "次空返回，重试");
         }
@@ -972,6 +1216,31 @@ public class App extends Application {
         int start = i + startTag.length();
         int j = (endTag == null) ? -1 : text.indexOf(endTag, start);
         return (j < 0 ? text.substring(start) : text.substring(start, j)).trim();
+    }
+
+    /** 弹窗显示某一边的人设档案原文（只读）。 */
+    private void showPersonaContent(boolean left) {
+        File f = dataFile("personas/" + (left ? "left.md" : "right.md"));
+        String content;
+        if (!f.exists()) {
+            content = "（还没有导入" + (left ? "左边" : "右边") + "人设档案）";
+        } else {
+            try { content = Files.readString(f.toPath()); }
+            catch (Exception e) { content = "（读取失败：" + e.getMessage() + "）"; }
+        }
+        Dialog<Void> d = new Dialog<>();
+        String displayName = left ? nameOther : nameSelf;
+        d.setTitle("人设档案 · " + (left ? "左" : "右") + (displayName.equals("对方") || displayName.equals("我方") ? "" : "「" + displayName + "」"));
+        d.setHeaderText("当前时间线「" + currentTimeline + "」的 " + (left ? "left.md" : "right.md"));
+        TextArea ta = new TextArea(content);
+        ta.setEditable(false);
+        ta.setWrapText(true);
+        ta.setPrefRowCount(26);
+        ta.setPrefColumnCount(72);
+        d.getDialogPane().setContent(ta);
+        d.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        themeDialog(d);
+        d.showAndWait();
     }
 
     /** 弹窗显示当前时间线累积的风格指引（👍多保持 / 👎要规避）。 */
@@ -1136,7 +1405,7 @@ public class App extends Application {
             msgs.put(new JSONObject().put("role", "system").put("content", sys));
             msgs.put(new JSONObject().put("role", "user").put("content", roundText));
             try {
-                String raw = DeepSeekClient.chat(key, model, msgs);
+                String raw = DeepSeekClient.chat(apiUrl, key, model, msgs);
                 List<String> pts = new ArrayList<>();
                 for (String line : raw.split("\n")) {
                     String s = line.strip().replaceFirst("^[-*•\\d.、）)\\s]+", "").strip();
@@ -1536,14 +1805,32 @@ public class App extends Application {
     /** 新建时间线：默认从当前复制 personas 过去，聊天/纠正/风格全空。 */
     private void createTimelineDialog() {
         if (busy) { alert("先停止当前运行再新建时间线"); return; }
-        TextInputDialog d = new TextInputDialog();
-        d.setTitle("新建时间线");
-        d.setHeaderText("给新时间线起个名字（会自动建文件夹）");
-        d.setContentText("名字：");
-        themeDialog(d);
-        Optional<String> r = d.showAndWait();
+        Dialog<String[]> dlg = new Dialog<>();
+        dlg.setTitle("新建时间线");
+        dlg.setHeaderText("起个名字，并设定两人初始关系（之后由 AI 巡视对话自动演化）");
+        TextField nameF = new TextField();
+        nameF.setPromptText("例：默认 / 高中重逢 / what_if_no_breakup");
+        nameF.getStyleClass().add("field");
+        TextField relF = new TextField();
+        relF.setPromptText("例：高中同学，刚互相表白第 1 天");
+        relF.getStyleClass().add("field");
+        GridPane g = new GridPane();
+        g.setHgap(8); g.setVgap(8);
+        g.add(new Label("时间线名字："), 0, 0); g.add(nameF, 1, 0);
+        g.add(new Label("初始关系："), 0, 1); g.add(relF, 1, 1);
+        GridPane.setHgrow(nameF, Priority.ALWAYS);
+        GridPane.setHgrow(relF, Priority.ALWAYS);
+        nameF.setMaxWidth(Double.MAX_VALUE);
+        relF.setMaxWidth(Double.MAX_VALUE);
+        g.setPrefWidth(480);
+        dlg.getDialogPane().setContent(g);
+        dlg.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+        dlg.setResultConverter(bt -> bt == ButtonType.OK ? new String[]{ nameF.getText(), relF.getText() } : null);
+        themeDialog(dlg);
+        Optional<String[]> r = dlg.showAndWait();
         if (r.isEmpty()) return;
-        String name = sanitizeTimelineName(r.get());
+        String name = sanitizeTimelineName(r.get()[0]);
+        String relation = r.get()[1] == null ? "" : r.get()[1].trim();
         if (name == null) { alert("名字不合法（不能含 \\ / : * ? \" < > |，最长 60 字）"); return; }
         File dir = new File(timelinesRoot(), name);
         if (dir.exists()) { alert("已存在同名时间线：" + name); return; }
@@ -1563,6 +1850,11 @@ public class App extends Application {
                 Log.w("TIMELINE", "复制人设失败：" + e.getMessage());
             }
         }
+        // 提前写一份 meta，让 switchTimeline → loadMeta 时把 relation 加载进来
+        try {
+            JSONObject o = new JSONObject().put("relationship", relation).put("startTime", fmtHHmm(startTimeOfDay));
+            Files.writeString(new File(dir, "meta.json").toPath(), o.toString(2));
+        } catch (Exception ignored) {}
         switchTimeline(name);
     }
 
@@ -1750,6 +2042,387 @@ public class App extends Application {
     }
 
     /** 主题选择对话框。 */
+    // ===== 设置对话框（检查更新 / 重看引导 / 关于） =====
+    private void showSettingsDialog() {
+        Dialog<Void> d = new Dialog<>();
+        d.setTitle("设置");
+        d.setHeaderText(APP_NAME + " · v" + APP_VERSION);
+
+        // ===== API 段（任意 OpenAI 兼容服务） =====
+        ComboBox<String> provCombo = new ComboBox<>();
+        for (Provider p : PROVIDERS) provCombo.getItems().add(p.name());
+        provCombo.setValue(apiProvider);
+        provCombo.getStyleClass().add("combo");
+        TextField urlF = new TextField(apiUrl);
+        urlF.getStyleClass().add("field");
+        urlF.setPromptText("https://api.xxx.com/v1/chat/completions");
+        TextField modelF = new TextField(modelField.getText());
+        modelF.getStyleClass().add("field");
+        modelF.setPromptText("deepseek-chat / gpt-4o-mini / …");
+        PasswordField keyF = new PasswordField();
+        keyF.setText(keyField.getText());
+        keyF.getStyleClass().add("field");
+        keyF.setPromptText("sk-…");
+        provCombo.setOnAction(e -> {
+            String name = provCombo.getValue();
+            if (name == null) return;
+            for (Provider p : PROVIDERS) {
+                if (p.name().equals(name)) {
+                    if (!"自定义".equals(name)) {
+                        urlF.setText(p.url());
+                        if (modelF.getText().isBlank()) modelF.setText(p.defaultModel());
+                    }
+                    break;
+                }
+            }
+        });
+        Button apiSaveBtn = new Button("应用 API 设置");
+        apiSaveBtn.getStyleClass().add("btn");
+        Label apiSaveHint = new Label("");
+        apiSaveBtn.setOnAction(e -> {
+            apiProvider = provCombo.getValue();
+            apiUrl = urlF.getText().trim();
+            modelField.setText(modelF.getText().trim());
+            keyField.setText(keyF.getText().trim());
+            savePrefs();
+            apiSaveHint.setText("✅ 已保存");
+        });
+        GridPane apiGrid = new GridPane();
+        apiGrid.setHgap(8); apiGrid.setVgap(6);
+        apiGrid.add(new Label("服务商："), 0, 0); apiGrid.add(provCombo, 1, 0);
+        apiGrid.add(new Label("接口地址："), 0, 1); apiGrid.add(urlF, 1, 1);
+        apiGrid.add(new Label("模型："), 0, 2); apiGrid.add(modelF, 1, 2);
+        apiGrid.add(new Label("API Key："), 0, 3); apiGrid.add(keyF, 1, 3);
+        GridPane.setHgrow(urlF, Priority.ALWAYS);
+        GridPane.setHgrow(modelF, Priority.ALWAYS);
+        GridPane.setHgrow(keyF, Priority.ALWAYS);
+        urlF.setMaxWidth(Double.MAX_VALUE);
+        modelF.setMaxWidth(Double.MAX_VALUE);
+        keyF.setMaxWidth(Double.MAX_VALUE);
+
+        Label updHint = new Label("从 GitHub releases 拉取最新版本号比对");
+        updHint.getStyleClass().add("bar-label");
+        Button checkBtn = new Button("🔄 检查更新");
+        checkBtn.getStyleClass().add("btn");
+        Label updResult = new Label("");
+        updResult.setWrapText(true);
+        updResult.setMaxWidth(380);
+        Button openReleasesBtn = new Button("前往下载页");
+        openReleasesBtn.getStyleClass().add("btn-ghost");
+        openReleasesBtn.setVisible(false);
+        openReleasesBtn.setManaged(false);
+        String[] latestUrl = { "https://github.com/lingyunalingyun/Simulated-dialogue-program/releases" };
+        openReleasesBtn.setOnAction(e -> openInBrowser(latestUrl[0]));
+        checkBtn.setOnAction(e -> {
+            checkBtn.setDisable(true);
+            updResult.setText("检查中…");
+            new Thread(() -> {
+                try {
+                    java.net.http.HttpClient c = java.net.http.HttpClient.newBuilder()
+                            .connectTimeout(java.time.Duration.ofSeconds(8)).build();
+                    java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(java.net.URI.create(UPDATE_API))
+                            .header("Accept", "application/vnd.github+json")
+                            .header("User-Agent", "LanHing-VirtualChat-Updater")
+                            .timeout(java.time.Duration.ofSeconds(10))
+                            .GET().build();
+                    java.net.http.HttpResponse<String> resp = c.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
+                    JSONObject o = new JSONObject(resp.body());
+                    String tag = o.optString("tag_name", "").replaceFirst("^v", "");
+                    String name = o.optString("name", "v" + tag);
+                    String html = o.optString("html_url", latestUrl[0]);
+                    Platform.runLater(() -> {
+                        checkBtn.setDisable(false);
+                        if (tag.isEmpty()) { updResult.setText("❌ 解析失败：" + Log.cut(resp.body(), 100)); return; }
+                        int cmp = compareVersion(tag, APP_VERSION);
+                        if (cmp > 0) {
+                            updResult.setText("✨ 发现新版本 v" + tag + "（" + name + "）");
+                            latestUrl[0] = html;
+                            openReleasesBtn.setVisible(true);
+                            openReleasesBtn.setManaged(true);
+                        } else if (cmp == 0) {
+                            updResult.setText("✅ 已是最新版本（v" + APP_VERSION + "）");
+                        } else {
+                            updResult.setText("ℹ️ 远端是 v" + tag + "，本地 v" + APP_VERSION + "（更新）");
+                        }
+                    });
+                } catch (Exception ex) {
+                    Platform.runLater(() -> {
+                        checkBtn.setDisable(false);
+                        updResult.setText("❌ 检查失败：" + ex.getMessage());
+                    });
+                }
+            }, "update-check").start();
+        });
+
+        Button guideBtn = new Button("📖 重看使用引导");
+        guideBtn.getStyleClass().add("btn-ghost");
+        guideBtn.setOnAction(e -> showFirstRunGuide(true));
+
+        Button repoBtn = new Button("打开 GitHub 仓库");
+        repoBtn.getStyleClass().add("btn-ghost");
+        repoBtn.setOnAction(e -> openInBrowser("https://github.com/lingyunalingyun/Simulated-dialogue-program"));
+
+        // ===== 人设段 =====
+        Label personasHint = new Label("当前时间线「" + currentTimeline + "」的双方人设档案");
+        personasHint.getStyleClass().add("bar-label");
+        Button impLeftBtn = new Button();
+        impLeftBtn.getStyleClass().add("btn-ghost");
+        Button impRightBtn = new Button();
+        impRightBtn.getStyleClass().add("btn-ghost");
+        Button viewLeftBtn = new Button("👀 查看左边档案内容");
+        viewLeftBtn.getStyleClass().add("btn-ghost");
+        viewLeftBtn.setOnAction(e -> showPersonaContent(true));
+        Button viewRightBtn = new Button("👀 查看右边档案内容");
+        viewRightBtn.getStyleClass().add("btn-ghost");
+        viewRightBtn.setOnAction(e -> showPersonaContent(false));
+        Runnable refreshPersonaBtns = () -> {
+            impLeftBtn.setText("📁 左边：" + (dataFile("personas/left.md").exists() ? "「" + nameOther + "」（点击更换）" : "未导入，点击选择…"));
+            impRightBtn.setText("📁 右边：" + (dataFile("personas/right.md").exists() ? "「" + nameSelf + "」（点击更换）" : "未导入，点击选择…"));
+            viewLeftBtn.setDisable(!dataFile("personas/left.md").exists());
+            viewRightBtn.setDisable(!dataFile("personas/right.md").exists());
+        };
+        refreshPersonaBtns.run();
+        impLeftBtn.setOnAction(e -> { importPersona(true); refreshPersonaBtns.run(); });
+        impRightBtn.setOnAction(e -> { importPersona(false); refreshPersonaBtns.run(); });
+        HBox personaRow1 = new HBox(8, impLeftBtn, viewLeftBtn);
+        HBox personaRow2 = new HBox(8, impRightBtn, viewRightBtn);
+
+        // ===== AI 学到的（风格指引） =====
+        Button viewStyleBtn = new Button("📋 查看风格总结（AI 累计学到的指引）");
+        viewStyleBtn.getStyleClass().add("btn-ghost");
+        viewStyleBtn.setOnAction(e -> showStyleSummary());
+
+        // ===== 各分区内容 =====
+        VBox apiSec = settingsSection("API · 任意 OpenAI 兼容服务",
+                "粘 Key 即可。绝大多数厂家（DeepSeek/OpenAI/Moonshot/Zhipu/Qwen/Gemini/OpenRouter/SiliconFlow…）都用 OpenAI 协议。",
+                apiGrid, new HBox(8, apiSaveBtn, apiSaveHint));
+        VBox personaSec = settingsSection("人设档案",
+                "当前时间线「" + currentTimeline + "」的双方人设档案", personaRow1, personaRow2);
+        VBox styleSec = settingsSection("AI 学到的风格指引",
+                "👍 / 👎 整轮反馈后，AI 自动总结成「多保持/要规避」两组指引，下一轮生成时注入双方 system prompt。",
+                viewStyleBtn);
+        CheckBox autoUpdateBox = new CheckBox("自动检查并下载更新（关闭后小版本只通知，大版本仍强制）");
+        autoUpdateBox.setSelected(autoUpdate);
+        autoUpdateBox.setOnAction(e -> { autoUpdate = autoUpdateBox.isSelected(); savePrefs(); });
+        VBox updateSec = settingsSection("更新", "启动时自动比对 GitHub releases；连接不到 GitHub 静默跳过",
+                autoUpdateBox, new HBox(8, checkBtn, openReleasesBtn), updResult);
+        VBox guideSec = settingsSection("使用引导", "回顾首启动的分步引导（不会重置已填资料）", guideBtn);
+        VBox aboutSec = settingsSection("关于",
+                APP_NAME + " · v" + APP_VERSION + "\nMIT License · © 2026 lingyunalingyun", repoBtn);
+
+        // ===== 侧栏 + 内容区 =====
+        ListView<String> sidebar = new ListView<>();
+        sidebar.getItems().addAll("API", "人设档案", "风格指引", "更新", "引导", "关于");
+        sidebar.getStyleClass().add("settings-sidebar");
+        sidebar.setPrefWidth(140);
+        sidebar.setMaxWidth(140);
+        StackPane contentPane = new StackPane();
+        contentPane.setPrefSize(480, 380);
+        contentPane.setPadding(new Insets(0, 0, 0, 16));
+        java.util.Map<String, Node> secMap = new java.util.LinkedHashMap<>();
+        secMap.put("API", apiSec);
+        secMap.put("人设档案", personaSec);
+        secMap.put("风格指引", styleSec);
+        secMap.put("更新", updateSec);
+        secMap.put("引导", guideSec);
+        secMap.put("关于", aboutSec);
+        sidebar.getSelectionModel().selectedItemProperty().addListener((o, was, is) -> {
+            if (is == null) return;
+            contentPane.getChildren().setAll(secMap.get(is));
+        });
+        sidebar.getSelectionModel().select(0);
+
+        HBox root = new HBox(sidebar, contentPane);
+        root.setPrefSize(640, 400);
+        d.getDialogPane().setContent(root);
+        d.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        themeDialog(d);
+        d.showAndWait();
+    }
+
+    /** 设置对话框里每个分区：标题 + 可选说明 + 内容控件。 */
+    private VBox settingsSection(String title, String desc, Node... contents) {
+        Label t = new Label(title);
+        t.setStyle("-fx-font-size: 16px; -fx-font-weight: bold;");
+        VBox box = new VBox(10);
+        box.getChildren().add(t);
+        if (desc != null && !desc.isBlank()) {
+            Label d = new Label(desc);
+            d.setWrapText(true);
+            d.getStyleClass().add("bar-label");
+            d.setMaxWidth(460);
+            box.getChildren().add(d);
+        }
+        for (Node n : contents) box.getChildren().add(n);
+        return box;
+    }
+
+    /** 简化的版本号比较：x.y.z 按段比，非数字段当 0。 */
+    private static int compareVersion(String a, String b) {
+        String[] aa = a.split("\\."), bb = b.split("\\.");
+        int n = Math.max(aa.length, bb.length);
+        for (int i = 0; i < n; i++) {
+            int va = 0, vb = 0;
+            try { va = i < aa.length ? Integer.parseInt(aa[i].replaceAll("[^0-9]", "")) : 0; } catch (Exception ignored) {}
+            try { vb = i < bb.length ? Integer.parseInt(bb[i].replaceAll("[^0-9]", "")) : 0; } catch (Exception ignored) {}
+            if (va != vb) return Integer.compare(va, vb);
+        }
+        return 0;
+    }
+
+    /** 用系统默认浏览器打开 URL。 */
+    private void openInBrowser(String url) {
+        try {
+            if (java.awt.Desktop.isDesktopSupported()
+                    && java.awt.Desktop.getDesktop().isSupported(java.awt.Desktop.Action.BROWSE)) {
+                java.awt.Desktop.getDesktop().browse(java.net.URI.create(url));
+            } else {
+                new ProcessBuilder("cmd", "/c", "start", "", url).start();
+            }
+        } catch (Exception e) {
+            alert("打不开浏览器，URL：\n" + url + "\n\n" + e.getMessage());
+        }
+    }
+
+    /** 首次使用引导（forceShow=true 时强制显示，不写 seenGuide）。分步交互填资料。 */
+    private void showFirstRunGuide(boolean forceShow) {
+        Dialog<Void> d = new Dialog<>();
+        d.setTitle(forceShow ? "使用引导" : "欢迎使用 " + APP_NAME);
+        final int TOTAL = 5;
+
+        Label stepLbl = new Label();
+        stepLbl.getStyleClass().add("bar-label");
+        Label hint = new Label();
+        hint.setWrapText(true);
+        hint.setMaxWidth(500);
+        VBox inputArea = new VBox(8);
+        inputArea.setMinHeight(120);
+
+        Button back = new Button("← 上一步");
+        back.getStyleClass().add("btn-ghost");
+        Button next = new Button("下一步 →");
+        next.getStyleClass().add("btn");
+        Button skip = new Button("以后再说");
+        skip.getStyleClass().add("btn-ghost");
+        Region sp = new Region();
+        HBox.setHgrow(sp, Priority.ALWAYS);
+        HBox nav = new HBox(8, back, next, sp, skip);
+        nav.setAlignment(Pos.CENTER_LEFT);
+
+        VBox box = new VBox(12, stepLbl, hint, inputArea, new Separator(), nav);
+        box.setPrefWidth(560);
+
+        int[] s = { 1 };
+        Runnable render = () -> {
+            stepLbl.setText("步骤 " + s[0] + " / " + TOTAL);
+            inputArea.getChildren().clear();
+            switch (s[0]) {
+                case 1 -> {
+                    hint.setText("第一步 · 选服务商 + 填 Key\n\n支持市面上大多数模型服务（OpenAI 兼容协议）。挑一家、申请 Key（一般 platform.<服务商>.com）、粘进来即可。稍后从右上 ⚙ 设置里随时改。");
+                    ComboBox<String> wProv = new ComboBox<>();
+                    for (Provider p : PROVIDERS) wProv.getItems().add(p.name());
+                    wProv.setValue(apiProvider);
+                    wProv.getStyleClass().add("combo");
+                    TextField wModel = new TextField(modelField.getText());
+                    wModel.getStyleClass().add("field");
+                    wModel.setPromptText("模型名（自动填）");
+                    PasswordField wKey = new PasswordField();
+                    wKey.setText(keyField.getText());
+                    wKey.setPromptText("sk-…");
+                    wKey.getStyleClass().add("field");
+                    wProv.setOnAction(e -> {
+                        String name = wProv.getValue();
+                        if (name == null) return;
+                        for (Provider p : PROVIDERS) {
+                            if (p.name().equals(name)) {
+                                apiProvider = name;
+                                if (!"自定义".equals(name)) {
+                                    apiUrl = p.url();
+                                    if (wModel.getText().isBlank()) wModel.setText(p.defaultModel());
+                                }
+                                break;
+                            }
+                        }
+                    });
+                    wModel.textProperty().addListener((o, was, is) -> modelField.setText(is));
+                    wKey.textProperty().addListener((o, was, is) -> keyField.setText(is));
+                    GridPane g = new GridPane();
+                    g.setHgap(8); g.setVgap(6);
+                    g.add(new Label("服务商："), 0, 0); g.add(wProv, 1, 0);
+                    g.add(new Label("模型："), 0, 1); g.add(wModel, 1, 1);
+                    g.add(new Label("API Key："), 0, 2); g.add(wKey, 1, 2);
+                    GridPane.setHgrow(wModel, Priority.ALWAYS);
+                    GridPane.setHgrow(wKey, Priority.ALWAYS);
+                    wModel.setMaxWidth(Double.MAX_VALUE);
+                    wKey.setMaxWidth(Double.MAX_VALUE);
+                    inputArea.getChildren().add(g);
+                }
+                case 2 -> {
+                    hint.setText("第二步 · 导入左边人设（聊天窗左栏角色）\n\n选一份 .md 档案。推荐用配套蒸馏 Skill 从聊天记录自动生成，也可以手写一份（首行 # 标题 决定显示名）。");
+                    Button pick = new Button("📁 选择左边人设档案…");
+                    pick.getStyleClass().add("btn");
+                    Label status = new Label();
+                    Runnable refresh = () -> status.setText("当前：" + (dataFile("personas/left.md").exists() ? "「" + nameOther + "」✓" : "未导入"));
+                    refresh.run();
+                    pick.setOnAction(e -> { importPersona(true); refresh.run(); });
+                    inputArea.getChildren().addAll(pick, status);
+                }
+                case 3 -> {
+                    hint.setText("第三步 · 导入右边人设（聊天窗右栏角色）");
+                    Button pick = new Button("📁 选择右边人设档案…");
+                    pick.getStyleClass().add("btn");
+                    Label status = new Label();
+                    Runnable refresh = () -> status.setText("当前：" + (dataFile("personas/right.md").exists() ? "「" + nameSelf + "」✓" : "未导入"));
+                    refresh.run();
+                    pick.setOnAction(e -> { importPersona(false); refresh.run(); });
+                    inputArea.getChildren().addAll(pick, status);
+                }
+                case 4 -> {
+                    hint.setText("第四步 · 他俩当前是什么关系？\n\nAI 会按这个亲密度说话。例：\n• 高中同学，刚互相表白第 1 天\n• 在一起 3 年的老情侣\n• 刚分手两周还有点别扭");
+                    TextField rf = new TextField(relationField.getText());
+                    rf.getStyleClass().add("field");
+                    rf.setPromptText("当前关系…");
+                    rf.textProperty().addListener((o, was, is) -> relationField.setText(is));
+                    inputArea.getChildren().addAll(new Label("当前关系："), rf);
+                }
+                case 5 -> {
+                    hint.setText("全设好了 🎉\n\n点「完成」后：\n• 写开场场景 → 点「开始」或「AI 开场」让 AI 起头\n• 点「生成 10 轮」让两个 AI 自由聊\n• 看到很像/不像就 👍/👎，AI 会自己总结成指引\n\n顶栏「时间线」可建多档（同人设不同分支故事）。\n右上 ⚙ 设置 · 🎨 主题。\n\n所有数据只存在程序目录 data/，绝不上传。");
+                    inputArea.getChildren().clear();
+                }
+            }
+            back.setDisable(s[0] == 1);
+            next.setText(s[0] == TOTAL ? "完成 ✓" : "下一步 →");
+        };
+
+        back.setOnAction(e -> { if (s[0] > 1) { s[0]--; render.run(); } });
+        next.setOnAction(e -> {
+            if (s[0] == TOTAL) {
+                if (!forceShow) { seenGuide = true; }
+                savePrefs();
+                d.setResult(null);
+                d.close();
+            } else {
+                s[0]++;
+                render.run();
+            }
+        });
+        skip.setOnAction(e -> {
+            if (!forceShow) { seenGuide = true; }
+            savePrefs();
+            d.setResult(null);
+            d.close();
+        });
+
+        render.run();
+        d.getDialogPane().setContent(box);
+        // 必须保留 CLOSE 才能按 ESC 关闭；但把它隐藏掉，避免和我们的 nav 重叠
+        d.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        themeDialog(d);
+        Node closeButton = d.getDialogPane().lookupButton(ButtonType.CLOSE);
+        if (closeButton != null) { closeButton.setVisible(false); closeButton.setManaged(false); }
+        d.showAndWait();
+    }
+
     private void showThemeDialog() {
         Dialog<Void> d = new Dialog<>();
         d.setTitle("主题设置");
@@ -1854,6 +2527,10 @@ public class App extends Application {
                 themeMode = o.optString("themeMode", themeMode);
                 themeAccent = o.optString("themeAccent", themeAccent);
                 themeCustomColor = o.optString("themeCustomColor", themeCustomColor);
+                seenGuide = o.optBoolean("seenGuide", false);
+                autoUpdate = o.optBoolean("autoUpdate", true);
+                apiProvider = o.optString("apiProvider", apiProvider);
+                apiUrl = o.optString("apiUrl", apiUrl);
                 return;
             } catch (Exception ignored) {
             }
@@ -1873,6 +2550,10 @@ public class App extends Application {
                     .put("themeMode", themeMode)
                     .put("themeAccent", themeAccent)
                     .put("themeCustomColor", themeCustomColor)
+                    .put("seenGuide", seenGuide)
+                    .put("autoUpdate", autoUpdate)
+                    .put("apiProvider", apiProvider)
+                    .put("apiUrl", apiUrl)
                     .put("corpusPath", corpusPath)
                     .put("corpusLeft", corpusLeft)
                     .put("corpusRight", corpusRight);

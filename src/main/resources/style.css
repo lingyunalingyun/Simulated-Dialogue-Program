@@ -210,6 +210,46 @@
     -fx-prompt-text-fill: derive(ink-2, 30%); -fx-text-fill: ink;
 }
 
+/* ---------- 关系 chip（只读、由 AI 巡视更新） ---------- */
+.relation-chip {
+    -fx-background-color: derive(accent, 75%);
+    -fx-text-fill: accent-dark;
+    -fx-background-radius: 14;
+    -fx-padding: 4 12 4 12;
+    -fx-font-size: 12px;
+    -fx-border-color: accent-bright;
+    -fx-border-radius: 14;
+    -fx-border-width: 1;
+}
+
+/* ---------- 设置对话框侧栏 ---------- */
+.settings-sidebar {
+    -fx-background-color: field-bg;
+    -fx-background-insets: 0;
+    -fx-padding: 4 0;
+    -fx-border-color: line;
+    -fx-border-width: 0 1 0 0;
+}
+.settings-sidebar .list-cell {
+    -fx-padding: 10 16 10 16;
+    -fx-background-color: transparent;
+    -fx-text-fill: ink;
+    -fx-font-size: 13px;
+}
+.settings-sidebar .list-cell:filled:hover {
+    -fx-background-color: derive(accent, 80%);
+    -fx-text-fill: ink;
+}
+.settings-sidebar .list-cell:filled:selected {
+    -fx-background-color: accent;
+    -fx-text-fill: white;
+}
+.settings-sidebar .list-cell:filled:selected:focused {
+    -fx-background-color: accent;
+    -fx-text-fill: white;
+}
+.themed-dialog .settings-sidebar { -fx-background-color: field-bg; }
+
 /* ---------- 主题选择器：色块 ---------- */
 .swatch {
     -fx-min-width: 32; -fx-min-height: 32; -fx-pref-width: 32; -fx-pref-height: 32;
