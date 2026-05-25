@@ -28,9 +28,11 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Random;
+import java.util.Set;
 
 public class App extends Application {
 
@@ -40,7 +42,7 @@ public class App extends Application {
     private static final int WINDOW = 40;          // 只喂模型最近 N 条
     private static final int ROUNDS = 10;          // 一批 10 个来回
     private static final int LEAVE_DELAY = 1;      // 有人说要离开后，再过几条触发事件旁白
-    private static final String APP_VERSION = "1.1.1";
+    private static final String APP_VERSION = "1.1.2";
     private static final String APP_NAME = "LanHing-VirtualChat";
     private static final String UPDATE_API =
             "https://api.github.com/repos/lingyunalingyun/LanHing-VirtualChat-Program/releases/latest";
@@ -102,7 +104,18 @@ public class App extends Application {
     private final java.util.ArrayDeque<Pending> pendingQueue = new java.util.ArrayDeque<>();
     private record Pending(Conversation.Who who, String msg, String think,
                            LocalDateTime due, boolean isLast, Conversation.Who nextAfter,
-                           String leaveAfter) {}
+                           String leaveAfter, String imagePath) {
+        // 兼容旧构造，imagePath 默认空
+        Pending(Conversation.Who who, String msg, String think, LocalDateTime due,
+                boolean isLast, Conversation.Who nextAfter, String leaveAfter) {
+            this(who, msg, think, due, isLast, nextAfter, leaveAfter, "");
+        }
+    }
+    /** AI 输出的 [图:tag] 标记；占独立一行才算图行。 */
+    private static final java.util.regex.Pattern IMAGE_MARK =
+            java.util.regex.Pattern.compile("^\\s*\\[\\s*图\\s*(?::\\s*([^\\]]*))?\\]\\s*$");
+    private final ImageLibrary imgLeft = new ImageLibrary("left");
+    private final ImageLibrary imgRight = new ImageLibrary("right");
     private String runKey, runModel, runScenario;
     private Conversation.Who current = Conversation.Who.LEFT;
     private volatile boolean busy = false;
@@ -166,6 +179,7 @@ public class App extends Application {
         loadCorrections();
         loadStyle();
         loadPersonas();
+        loadImageLibs();
         loadTimeline();
         refreshTimelineCombo();
         renderAll();
@@ -680,11 +694,28 @@ public class App extends Application {
         leftBtn.setOnAction(e -> interject(Conversation.Who.LEFT));
         rightBtn.setOnAction(e -> interject(Conversation.Who.RIGHT));
         narrBtn.setOnAction(e -> interject(Conversation.Who.NARRATION));
+
+        MenuButton imgBtn = new MenuButton("📷 发图");
+        imgBtn.getStyleClass().add("btn-ghost");
+        MenuItem imgLeftItem = new MenuItem();
+        MenuItem imgRightItem = new MenuItem();
+        Runnable refreshImgItems = () -> {
+            imgLeftItem.setText("以 " + nameOther + " 发图（库 " + imgLeft.size() + "）");
+            imgRightItem.setText("以 " + nameSelf + " 发图（库 " + imgRight.size() + "）");
+            imgLeftItem.setDisable(imgLeft.isEmpty());
+            imgRightItem.setDisable(imgRight.isEmpty());
+        };
+        refreshImgItems.run();
+        imgBtn.setOnShowing(e -> refreshImgItems.run());
+        imgLeftItem.setOnAction(e -> pickAndInsertImage(Conversation.Who.LEFT));
+        imgRightItem.setOnAction(e -> pickAndInsertImage(Conversation.Who.RIGHT));
+        imgBtn.getItems().addAll(imgLeftItem, imgRightItem);
+
         status.getStyleClass().add("status-label");
 
         HBox row1 = new HBox(8, genBtn, contBtn, stopBtn, clearBtn, negBtn, posBtn);
         row1.setAlignment(Pos.CENTER_LEFT);
-        HBox row2 = new HBox(8, interField, leftBtn, rightBtn, narrBtn);
+        HBox row2 = new HBox(8, interField, leftBtn, rightBtn, narrBtn, imgBtn);
         row2.setAlignment(Pos.CENTER_LEFT);
         status.setMaxWidth(Double.MAX_VALUE);
         VBox box = new VBox(8, row1, row2, status);
@@ -862,9 +893,15 @@ public class App extends Application {
 
     /** 揭示一条已备好的气泡。 */
     private void revealOne(Pending p) {
-        Conversation.Turn t = convo.add(p.who(), p.msg(), p.think(), p.due().toString());
+        try {
+            Log.w("REV", name(p.who()) + " due=" + fmtTimeSec(p.due())
+                    + " img=" + (p.imagePath().isEmpty() ? "-" : p.imagePath())
+                    + " text=" + Log.cut(p.msg(), 40));
+        } catch (Throwable ignored) {}
+        Conversation.Turn t = convo.add(p.who(), p.msg(), p.think(), p.due().toString(), p.imagePath());
         lastMsgTime = p.due();
-        addBubble(t);
+        try { addBubble(t); }
+        catch (Throwable ex) { Log.err("REV", ex); }
         saveTimeline();
         if (!p.isLast()) {
             status.setText("运行中… " + producedCount + "/" + targetCount + "（连发 · 时钟 " + fmtTimeSec(simClock) + "）");
@@ -968,24 +1005,65 @@ public class App extends Application {
     }
 
     /** 把一次 Gen 拆成 1~N 条气泡入队；第 1 条延迟 = AI 给的【隔】，后续每条 5-25 模拟秒。 */
+    private record Bubble(String text, String imagePath) {}
     private void enqueueGen(Gen g, Conversation.Who who) {
-        String[] parts = splitBurst(g.msg());
-        if (parts.length == 0) { stopRun("生成出来全是空气泡，已停。"); return; }
-        LocalDateTime t = lastMsgTime.plusMinutes(g.gap());
-        for (int i = 0; i < parts.length; i++) {
-            boolean last = (i == parts.length - 1);
-            String think = (i == 0) ? g.think() : "";
-            String leave = last ? g.leave() : null;
-            pendingQueue.add(new Pending(who, parts[i], think, t, last, last ? g.next() : null, leave));
-            if (!last) t = t.plusSeconds(5 + rnd.nextInt(20));
-        }
-        pendingDue = pendingQueue.peek().due();   // 仅保留：兼容外部观测
-        pendingGen = g;
-        Log.w("RUN", "已备 " + name(who) + " 隔" + g.gap() + "分 共" + parts.length + "条 起 → " + fmtTimeSec(pendingQueue.peek().due()));
-        // 时钟已越过队首，立即逐条揭示
-        while (!pendingQueue.isEmpty() && !simClock.isBefore(pendingQueue.peek().due())) {
-            revealOne(pendingQueue.poll());
-            if (!busy) return;
+        try {
+            Log.w("ENQ", "enter " + name(who) + " msg=" + Log.cut(g.msg(), 60));
+            String[] parts = splitBurst(g.msg());
+            Log.w("ENQ", "split → " + parts.length + " 段");
+            if (parts.length == 0) { stopRun("生成出来全是空气泡，已停。"); return; }
+
+            List<Bubble> bubbles = new ArrayList<>();
+            ImageLibrary lib = imageLib(who);
+            int imgsThisGen = 0;
+            for (String s : parts) {
+                java.util.regex.Matcher m = IMAGE_MARK.matcher(s);
+                if (m.matches()) {
+                    if (lib == null || lib.isEmpty()) {
+                        Log.w("RUN", name(who) + " AI 输出 [图:] 但表情包库为空，丢弃：" + s);
+                        continue;
+                    }
+                    if (imgsThisGen >= 2) {
+                        Log.w("RUN", name(who) + " 一次发图>2 限流，丢弃：" + s);
+                        continue;
+                    }
+                    String tag = m.group(1) == null ? "" : m.group(1).strip();
+                    String picked = lib.selectByTag(tag);
+                    if (picked == null) {
+                        Log.w("RUN", name(who) + " 选图返回空，丢弃：" + s);
+                        continue;
+                    }
+                    String altText = (tag.isEmpty() || tag.equals("?") || tag.equals("？")) ? "" : tag;
+                    bubbles.add(new Bubble(altText, lib.relativePath(picked)));
+                    imgsThisGen++;
+                    Log.w("RUN", name(who) + " 发图 tag=" + (tag.isEmpty() ? "(空)" : tag) + " → " + picked);
+                } else {
+                    bubbles.add(new Bubble(s, ""));
+                }
+            }
+            Log.w("ENQ", "bubbles=" + bubbles.size());
+            if (bubbles.isEmpty()) { stopRun("生成出来全是空气泡，已停。"); return; }
+
+            LocalDateTime t = lastMsgTime.plusMinutes(g.gap());
+            for (int i = 0; i < bubbles.size(); i++) {
+                boolean last = (i == bubbles.size() - 1);
+                String think = (i == 0) ? g.think() : "";
+                String leave = last ? g.leave() : null;
+                Bubble b = bubbles.get(i);
+                pendingQueue.add(new Pending(who, b.text(), think, t, last,
+                        last ? g.next() : null, leave, b.imagePath()));
+                if (!last) t = t.plusSeconds(5 + rnd.nextInt(20));
+            }
+            pendingDue = pendingQueue.peek().due();
+            pendingGen = g;
+            Log.w("RUN", "已备 " + name(who) + " 隔" + g.gap() + "分 共" + bubbles.size() + "条 起 → " + fmtTimeSec(pendingQueue.peek().due()));
+            while (!pendingQueue.isEmpty() && !simClock.isBefore(pendingQueue.peek().due())) {
+                revealOne(pendingQueue.poll());
+                if (!busy) return;
+            }
+        } catch (Throwable ex) {
+            Log.err("ENQ", ex);
+            stopRun("enqueueGen 异常：" + ex.getClass().getSimpleName() + " " + ex.getMessage());
         }
     }
 
@@ -1152,7 +1230,13 @@ public class App extends Application {
         String query = convo.lastSpokenText();
         if (query.isBlank()) query = scenario;
         String snippets = corpus.ready() ? corpus.retrieve(query, 4, nameOther, nameSelf) : "";
-        String system = side.buildSystem(correctionsFor(who), snippets)
+        ImageLibrary lib = imageLib(who);
+        String imageHint = null;
+        if (!lib.isEmpty()) {
+            List<String> pool = lib.tagPool();
+            imageHint = pool.isEmpty() ? "?" : String.join(", ", pool);
+        }
+        String system = side.buildSystem(correctionsFor(who), snippets, imageHint)
                 + "\n【上一条的时间】上一条消息发生在模拟时间 " + fmtTime(stampNow()) + "（" + period(simClock.getHour())
                 + "）。你自己决定隔多久再发这条（写在【隔】里），按落到的新时间点该有的状态说话（深夜会困、早上刚醒、饭点提吃饭）。"
                 + (runRelation.isEmpty() ? "" : "\n【当前你俩的关系】" + runRelation + "（严格按这个关系阶段和亲密度说话，别超前也别倒退）")
@@ -1172,8 +1256,13 @@ public class App extends Application {
         try { gap = gapStr.isEmpty() ? chatGap() : Math.min(2880, Integer.parseInt(gapStr)); }
         catch (Exception e) { gap = chatGap(); }
         String think = clean(section(raw, "【心理】", "【消息】"));
-        String msg = clean(section(raw, "【消息】", "【离开】"));
+        // 把 AI 可能写错的全角【图:xx】先转回 [图:xx]，否则会被 clean 整段剥掉
+        String msgRaw = section(raw, "【消息】", "【离开】")
+                .replaceAll("【\\s*图\\s*[:：]?\\s*([^】\\n]{0,40})】", "[图:$1]");
+        String msg = clean(msgRaw);
         String leave = clean(section(raw, "【离开】", "【轮到】"));
+        // AI 经常忘填【离开】，从【消息】里按关键词 fallback infer
+        if (leave.isEmpty()) leave = inferLeave(msgRaw);
         String nextStr = section(raw, "【轮到】", null);
         Conversation.Who next = nextStr.contains(nameSelf) ? Conversation.Who.RIGHT
                 : nextStr.contains(nameOther) ? Conversation.Who.LEFT : opposite(who);
@@ -1187,6 +1276,28 @@ public class App extends Application {
         Gen g = new Gen(think, msg, leave, gap, next);
         Log.w("GEN", name(who) + " 隔=" + gap + "分 心理=" + Log.cut(g.think(), 50) + " | 消息=" + Log.cut(g.msg(), 80) + " | 离开=" + g.leave() + " | 轮到=" + name(next));
         return g;
+    }
+
+    /** AI 没填【离开】时，从【消息】里按关键词推断活动；返回首个匹配的关键词，否则空。 */
+    private static final String[] LEAVE_KEYWORDS = {
+            "打游戏","开黑","打一局","睡觉","睡了","睡叭","睡吧","去睡","该睡","下线",
+            "洗澡","洗个澡","吃饭","去吃","做饭","上课","下课","画画","跑步","健身","运动",
+            "逛街","出门","买东西","加班","上班","工作","学习","自习","看剧","看电影","刷视频"
+    };
+    private static String inferLeave(String msg) {
+        if (msg == null || msg.isEmpty()) return "";
+        // 排除引用对方的话："你去睡吧" 这种不算自己要走
+        // 简单策略：消息里不含"你去"或"你要"才算
+        for (String k : LEAVE_KEYWORDS) {
+            int i = msg.indexOf(k);
+            if (i < 0) continue;
+            // 前缀两字符里有"你"则跳过（如"你睡吧"）
+            int prefStart = Math.max(0, i - 2);
+            String pref = msg.substring(prefStart, i);
+            if (pref.contains("你") || pref.contains("她") || pref.contains("他")) continue;
+            return k;
+        }
+        return "";
     }
 
     /** 清掉残留的标记，包括模型臆造的【X】（如【回】），并去掉首尾空白。 */
@@ -1306,18 +1417,150 @@ public class App extends Application {
         saveTimeline();
     }
 
+    /** 从一侧图库挑一张图，作为该侧的"插话"插入对话。 */
+    private void pickAndInsertImage(Conversation.Who who) {
+        if (busy) return;
+        ImageLibrary lib = imageLib(who);
+        if (lib.isEmpty()) { alert("「" + name(who) + "」还没导入表情包库（设置 → 表情包库）"); return; }
+
+        Dialog<String> d = new Dialog<>();
+        d.setTitle("选一张图发出去 · " + name(who));
+        d.setHeaderText("点缩略图即插入。库共 " + lib.size() + " 张。");
+        javafx.scene.layout.FlowPane grid = new javafx.scene.layout.FlowPane(8, 8);
+        grid.setPrefWrapLength(560);
+        final String[] picked = { null };
+        for (String fname : lib.fileNames()) {
+            File f = lib.file(fname);
+            if (!f.exists()) continue;
+            try {
+                ImageView iv = new ImageView(new Image(f.toURI().toString(), 88, 88, true, true, true));
+                iv.setFitWidth(88); iv.setFitHeight(88); iv.setPreserveRatio(true);
+                Button cell = new Button("", iv);
+                cell.getStyleClass().add("btn-ghost");
+                List<String> ts = lib.tagsOf(fname);
+                if (!ts.isEmpty()) cell.setTooltip(new Tooltip(String.join(", ", ts)));
+                final String f0 = fname;
+                cell.setOnAction(e -> { picked[0] = f0; d.setResult(f0); d.close(); });
+                grid.getChildren().add(cell);
+            } catch (Exception ignored) {}
+        }
+        ScrollPane sp = new ScrollPane(grid);
+        sp.setFitToWidth(true);
+        sp.setPrefSize(600, 380);
+        d.getDialogPane().setContent(sp);
+        d.getDialogPane().getButtonTypes().add(ButtonType.CANCEL);
+        themeDialog(d);
+        d.showAndWait();
+        if (picked[0] == null) return;
+
+        // 插入图气泡（类似 interject 但带 imagePath；不切 current/advance，让用户自由）
+        Conversation.Turn t = convo.add(who, "", "", stampNow(), lib.relativePath(picked[0]));
+        addBubble(t);
+        saveTimeline();
+        status.setText("已插入" + name(who) + "的一张图：" + picked[0]);
+    }
+
+    /** 弹标签编辑器：给图气泡里的那张图打 / 改 / 新增标签。改完写回 images_meta.json。 */
+    private void editImageTags(Conversation.Turn t) {
+        if (!t.isImage() || t.who() == Conversation.Who.NARRATION) return;
+        ImageLibrary lib = imageLib(t.who());
+        String fname = new File(t.imagePath()).getName();
+        File imgFile = lib.file(fname);
+        if (!imgFile.exists()) { alert("图片文件不存在：" + fname); return; }
+
+        Dialog<Void> d = new Dialog<>();
+        d.setTitle("图片标签 · " + name(t.who()));
+        d.setHeaderText("给「" + fname + "」打标签。AI 下次想发这类情绪时会优先挑这张。");
+
+        ImageView preview = new ImageView(new Image(imgFile.toURI().toString(), 160, 160, true, true, true));
+        preview.setPreserveRatio(true);
+        preview.setFitWidth(160);
+        preview.setFitHeight(160);   // 防长图把输入框挤出可视区
+
+        Label currentLbl = new Label("当前标签（勾选 = 该图属于此标签）：");
+        currentLbl.getStyleClass().add("bar-label");
+        javafx.scene.layout.FlowPane chipsPane = new javafx.scene.layout.FlowPane(8, 8);
+        chipsPane.setPrefWrapLength(360);
+
+        // tagPool 是全部图的并集；勾选状态来自这张图的 tagsOf
+        Set<String> selected = new java.util.LinkedHashSet<>(lib.tagsOf(fname));
+        Runnable rebuildChips = new Runnable() {
+            @Override public void run() {
+                chipsPane.getChildren().clear();
+                Set<String> union = new java.util.LinkedHashSet<>(lib.tagPool());
+                union.addAll(selected);   // 包括刚 new 的
+                if (union.isEmpty()) {
+                    Label empty = new Label("（还没任何标签，下面新增一个）");
+                    empty.getStyleClass().add("muted");
+                    chipsPane.getChildren().add(empty);
+                    return;
+                }
+                for (String tag : union) {
+                    ToggleButton tb = new ToggleButton(tag);
+                    tb.getStyleClass().add("tag-chip");
+                    tb.setSelected(selected.contains(tag));
+                    tb.selectedProperty().addListener((o, ov, nv) -> {
+                        if (nv) selected.add(tag); else selected.remove(tag);
+                    });
+                    chipsPane.getChildren().add(tb);
+                }
+            }
+        };
+        rebuildChips.run();
+
+        TextField newTag = new TextField();
+        newTag.setPromptText("新标签…");
+        newTag.getStyleClass().add("field");
+        Button addTagBtn = new Button("➕ 添加");
+        addTagBtn.getStyleClass().add("btn-ghost");
+        Runnable addAction = () -> {
+            String s = newTag.getText().strip();
+            if (s.isEmpty()) return;
+            if (s.length() > 20) s = s.substring(0, 20);
+            selected.add(s);
+            newTag.clear();
+            rebuildChips.run();
+        };
+        addTagBtn.setOnAction(e -> addAction.run());
+        newTag.setOnAction(e -> addAction.run());
+        HBox addRow = new HBox(8, newTag, addTagBtn);
+        HBox.setHgrow(newTag, Priority.ALWAYS);
+
+        VBox box = new VBox(10, preview, currentLbl, chipsPane, addRow);
+        box.setPrefWidth(420);
+        d.getDialogPane().setContent(box);
+        d.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+        themeDialog(d);
+        d.setResultConverter(bt -> {
+            if (bt == ButtonType.OK) {
+                lib.setTags(fname, new ArrayList<>(selected));
+                Log.w("IMG", "标签更新 " + lib.side() + "/" + fname + " → " + String.join(",", selected));
+                status.setText("已更新「" + fname + "」标签（" + selected.size() + " 个）");
+            }
+            return null;
+        });
+        d.showAndWait();
+    }
+
     /** 标记某条说错了：记成该角色的纠正，并把这条从时间线删掉。 */
     private void flagWrong(Conversation.Turn t) {
         if (busy) return;
         TextInputDialog d = new TextInputDialog();
         d.setTitle("纠正 " + name(t.who()));
-        d.setHeaderText("这句不对在哪？想让 " + name(t.who()) + " 以后怎么说？");
+        if (t.isImage()) {
+            d.setHeaderText("这张图在这里发得不合适，怎么调整？（会记成「以后这种情境别发图」）");
+        } else {
+            d.setHeaderText("这句不对在哪？想让 " + name(t.who()) + " 以后怎么说？");
+        }
         d.setContentText("说明：");
         themeDialog(d);
         Optional<String> r = d.showAndWait();
         if (r.isEmpty() || r.get().isBlank()) return;
-        correctionsFor(t.who()).add(new String[]{t.text(), r.get().trim()});
-        Log.w("CORRECT", name(t.who()) + "：「" + Log.cut(t.text(), 40) + "」→ " + Log.cut(r.get().trim(), 60));
+        String recorded = t.isImage()
+                ? "[发了一张图：" + (t.text().isEmpty() ? "无标签" : t.text()) + "]"
+                : t.text();
+        correctionsFor(t.who()).add(new String[]{recorded, r.get().trim()});
+        Log.w("CORRECT", name(t.who()) + "：「" + Log.cut(recorded, 40) + "」→ " + Log.cut(r.get().trim(), 60));
         saveCorrections();
         convo.remove(t.id());
         renderAll();
@@ -1498,19 +1741,74 @@ public class App extends Application {
         tm.getStyleClass().add("meta-time");
         HBox meta = new HBox(6, name, tm);
         meta.setAlignment(left ? Pos.CENTER_LEFT : Pos.CENTER_RIGHT);
-        Label msg = new Label(t.text());
-        msg.setWrapText(true);
-        msg.setMaxWidth(300);
-        msg.getStyleClass().add(left ? "bubble-other" : "bubble-self");
-        VBox msgV = new VBox(2, meta, msg);
+
+        Node bubbleNode;
+        Node hoverProbe;        // 鼠标悬停高亮探测节点（图气泡=ImageView 容器，文本气泡=Label）
+        VBox msgV;
+        Button tagBtn = null;   // 仅图气泡才有
+        if (t.isImage()) {
+            File img = new File(timelineDir(), t.imagePath());
+            Node imgNode;
+            if (img.exists()) {
+                ImageView iv = new ImageView();
+                try {
+                    iv.setImage(new Image(img.toURI().toString(), 240, 0, true, true, true));
+                } catch (Exception ignored) {}
+                iv.setFitWidth(200);
+                iv.setPreserveRatio(true);
+                iv.setSmooth(true);
+                imgNode = iv;
+            } else {
+                Label missing = new Label("[图片已删除] " + new File(t.imagePath()).getName());
+                missing.getStyleClass().add("muted");
+                imgNode = missing;
+            }
+            // 用 HBox 包（StackPane 在父 HBox 里默认 hgrow=SOMETIMES 会被撑满整行，导致图气泡看着像旁白）
+            HBox imgWrap = new HBox(imgNode);
+            imgWrap.setAlignment(Pos.CENTER);
+            imgWrap.getStyleClass().add(left ? "bubble-image-other" : "bubble-image-self");
+            imgWrap.setMaxWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+            imgWrap.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+            HBox.setHgrow(imgWrap, Priority.NEVER);
+            bubbleNode = imgWrap;
+            hoverProbe = imgWrap;
+            msgV = new VBox(2, meta, imgWrap);
+            msgV.setMaxWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+            HBox.setHgrow(msgV, Priority.NEVER);
+            tagBtn = new Button("#");
+            tagBtn.getStyleClass().add("flag-btn");
+            tagBtn.setTooltip(new Tooltip("给这张图打标签（AI 以后按情境选图）"));
+            final Conversation.Turn turnRef = t;
+            tagBtn.setOnAction(e -> editImageTags(turnRef));
+        } else {
+            Label msg = new Label(t.text());
+            msg.setWrapText(true);
+            msg.setMaxWidth(300);
+            msg.getStyleClass().add(left ? "bubble-other" : "bubble-self");
+            bubbleNode = msg;
+            hoverProbe = msg;
+            msgV = new VBox(2, meta, msg);
+        }
         msgV.setAlignment(left ? Pos.CENTER_LEFT : Pos.CENTER_RIGHT);
         Button x = new Button("✗");
         x.getStyleClass().add("flag-btn");
         x.setOnAction(e -> flagWrong(t));
+        HBox btnCol = new HBox(2);
+        btnCol.setAlignment(Pos.CENTER);
+        if (tagBtn != null) btnCol.getChildren().add(tagBtn);
+        btnCol.getChildren().add(x);
         HBox msgCell = new HBox(4);
         msgCell.setAlignment(left ? Pos.CENTER_LEFT : Pos.CENTER_RIGHT);
-        if (left) msgCell.getChildren().addAll(msgV, x);
-        else msgCell.getChildren().addAll(x, msgV);
+        // 图气泡显式用 spacer 撑掉对侧空白，避免 HBox alignment+hgrow 配合时图气泡被撑满整行
+        if (t.isImage()) {
+            javafx.scene.layout.Region spacer = new javafx.scene.layout.Region();
+            HBox.setHgrow(spacer, Priority.ALWAYS);
+            if (left) msgCell.getChildren().addAll(msgV, btnCol, spacer);
+            else msgCell.getChildren().addAll(spacer, btnCol, msgV);
+        } else {
+            if (left) msgCell.getChildren().addAll(msgV, btnCol);
+            else msgCell.getChildren().addAll(btnCol, msgV);
+        }
 
         // 右栏：内心
         String think = (t.think() == null || t.think().isBlank()) ? "—" : t.think();
@@ -1523,17 +1821,19 @@ public class App extends Application {
 
         // 悬停任一边，两边都高亮
         Runnable on = () -> {
-            if (!msg.getStyleClass().contains("linked")) msg.getStyleClass().add("linked");
+            if (!hoverProbe.getStyleClass().contains("linked")) hoverProbe.getStyleClass().add("linked");
             if (!tht.getStyleClass().contains("linked")) tht.getStyleClass().add("linked");
         };
-        Runnable off = () -> { msg.getStyleClass().remove("linked"); tht.getStyleClass().remove("linked"); };
-        msg.setOnMouseEntered(e -> on.run());
-        msg.setOnMouseExited(e -> off.run());
+        Runnable off = () -> { hoverProbe.getStyleClass().remove("linked"); tht.getStyleClass().remove("linked"); };
+        hoverProbe.setOnMouseEntered(e -> on.run());
+        hoverProbe.setOnMouseExited(e -> off.run());
         tht.setOnMouseEntered(e -> on.run());
         tht.setOnMouseExited(e -> off.run());
 
-        // 两栏各占一半
+        // 两栏强制各占一半：minWidth=0 让 HBox 不会因为图气泡的内在 pref 把 msgCell 撑得 > 50%
+        msgCell.setMinWidth(0);
         msgCell.setPrefWidth(0);
+        thtCell.setMinWidth(0);
         thtCell.setPrefWidth(0);
         HBox.setHgrow(msgCell, Priority.ALWAYS);
         HBox.setHgrow(thtCell, Priority.ALWAYS);
@@ -1565,6 +1865,7 @@ public class App extends Application {
     // ---------- 辅助 ----------
 
     private Persona personaFor(Conversation.Who w) { return w == Conversation.Who.LEFT ? plx : ly; }
+    private ImageLibrary imageLib(Conversation.Who w) { return w == Conversation.Who.LEFT ? imgLeft : imgRight; }
     private List<String[]> correctionsFor(Conversation.Who w) { return w == Conversation.Who.LEFT ? corrLeft : corrRight; }
     private String name(Conversation.Who w) {
         return w == Conversation.Who.LEFT ? nameOther : w == Conversation.Who.RIGHT ? nameSelf : "旁白";
@@ -1707,6 +2008,44 @@ public class App extends Application {
         return new File(timelineDir(), name);
     }
 
+    /** 重载左右两侧表情包库（指向当前时间线目录）。 */
+    private void loadImageLibs() {
+        imgLeft.load(timelineDir());
+        imgRight.load(timelineDir());
+        Log.w("IMG", "图库已加载 左=" + imgLeft.size() + " 右=" + imgRight.size());
+    }
+
+    /** 选一个文件夹导入到一侧的图库。 */
+    private void importImageLibrary(boolean left) {
+        if (busy) return;
+        javafx.stage.DirectoryChooser dc = new javafx.stage.DirectoryChooser();
+        dc.setTitle("选择" + (left ? "左边" : "右边") + "表情包文件夹（里面的图片会被复制进库）");
+        File dir = dc.showDialog(null);
+        if (dir == null) return;
+        ImageLibrary lib = left ? imgLeft : imgRight;
+        if (lib.imagesDir().getParentFile() == null) { alert("当前时间线目录无效"); return; }
+        int n = lib.importFolder(dir);
+        Log.w("IMG", "导入" + (left ? "左" : "右") + "表情包 " + n + " 张 来源=" + dir);
+        status.setText("已导入" + (left ? "左边" : "右边") + " " + n + " 张表情，当前库 " + lib.size() + " 张");
+    }
+
+    /** 清空一侧表情包库（含磁盘文件，二次确认）。 */
+    private void clearImageLibrary(boolean left) {
+        if (busy) return;
+        ImageLibrary lib = left ? imgLeft : imgRight;
+        if (lib.isEmpty()) { alert((left ? "左边" : "右边") + "本来就是空的"); return; }
+        Alert a = new Alert(Alert.AlertType.CONFIRMATION,
+                "确定清空「" + (left ? "左边" : "右边") + "」表情包库？\n"
+                        + "会删除磁盘上 " + lib.size() + " 张图片 + 所有标签。已发出的图气泡会变成 \"图片不存在\"。",
+                ButtonType.OK, ButtonType.CANCEL);
+        a.setHeaderText(null);
+        themeDialog(a);
+        if (a.showAndWait().orElse(ButtonType.CANCEL) != ButtonType.OK) return;
+        int n = lib.clearAll();
+        Log.w("IMG", "清空" + (left ? "左" : "右") + "表情包 删 " + n + " 张");
+        status.setText("已清空" + (left ? "左边" : "右边") + " " + n + " 张表情");
+    }
+
     /** 启动时一次性把旧版扁平布局的数据搬进 timelines/默认/。已迁移过就什么也不做。 */
     private void migrateLegacyData() {
         File timelinesDir = timelinesRoot();
@@ -1794,6 +2133,7 @@ public class App extends Application {
         loadCorrections();
         loadStyle();
         loadPersonas();
+        loadImageLibs();
         loadTimeline();
         renderAll();
         renderClock();
@@ -2188,6 +2528,33 @@ public class App extends Application {
         HBox personaRow1 = new HBox(8, impLeftBtn, viewLeftBtn);
         HBox personaRow2 = new HBox(8, impRightBtn, viewRightBtn);
 
+        // ===== 表情包库 =====
+        Button impLeftImgBtn = new Button();
+        impLeftImgBtn.getStyleClass().add("btn-ghost");
+        Button impRightImgBtn = new Button();
+        impRightImgBtn.getStyleClass().add("btn-ghost");
+        Button clearLeftImgBtn = new Button("🗑️ 清空左");
+        clearLeftImgBtn.getStyleClass().add("btn-ghost");
+        Button clearRightImgBtn = new Button("🗑️ 清空右");
+        clearRightImgBtn.getStyleClass().add("btn-ghost");
+        Runnable refreshImgBtns = () -> {
+            impLeftImgBtn.setText("📷 左边表情包：" + (imgLeft.isEmpty()
+                    ? "未导入，点击选文件夹…"
+                    : imgLeft.size() + " 张（点击追加/更换）"));
+            impRightImgBtn.setText("📷 右边表情包：" + (imgRight.isEmpty()
+                    ? "未导入，点击选文件夹…"
+                    : imgRight.size() + " 张（点击追加/更换）"));
+            clearLeftImgBtn.setDisable(imgLeft.isEmpty());
+            clearRightImgBtn.setDisable(imgRight.isEmpty());
+        };
+        refreshImgBtns.run();
+        impLeftImgBtn.setOnAction(e -> { importImageLibrary(true); refreshImgBtns.run(); });
+        impRightImgBtn.setOnAction(e -> { importImageLibrary(false); refreshImgBtns.run(); });
+        clearLeftImgBtn.setOnAction(e -> { clearImageLibrary(true); refreshImgBtns.run(); });
+        clearRightImgBtn.setOnAction(e -> { clearImageLibrary(false); refreshImgBtns.run(); });
+        HBox imgRow1 = new HBox(8, impLeftImgBtn, clearLeftImgBtn);
+        HBox imgRow2 = new HBox(8, impRightImgBtn, clearRightImgBtn);
+
         // ===== AI 学到的（风格指引） =====
         Button viewStyleBtn = new Button("📋 查看风格总结（AI 累计学到的指引）");
         viewStyleBtn.getStyleClass().add("btn-ghost");
@@ -2199,6 +2566,10 @@ public class App extends Application {
                 apiGrid, new HBox(8, apiSaveBtn, apiSaveHint));
         VBox personaSec = settingsSection("人设档案",
                 "当前时间线「" + currentTimeline + "」的双方人设档案", personaRow1, personaRow2);
+        VBox imagesSec = settingsSection("表情包库",
+                "每一侧独立。导入一个文件夹会把里面所有 png/jpg/gif/webp 复制进 personas/<侧>/images/。"
+                + "AI 输出 [图:标签] 时按标签从库里选图；点气泡的 🏷️ 给图打标签。",
+                imgRow1, imgRow2);
         VBox styleSec = settingsSection("AI 学到的风格指引",
                 "👍 / 👎 整轮反馈后，AI 自动总结成「多保持/要规避」两组指引，下一轮生成时注入双方 system prompt。",
                 viewStyleBtn);
@@ -2213,7 +2584,7 @@ public class App extends Application {
 
         // ===== 侧栏 + 内容区 =====
         ListView<String> sidebar = new ListView<>();
-        sidebar.getItems().addAll("API", "人设档案", "风格指引", "更新", "引导", "关于");
+        sidebar.getItems().addAll("API", "人设档案", "表情包库", "风格指引", "更新", "引导", "关于");
         sidebar.getStyleClass().add("settings-sidebar");
         sidebar.setPrefWidth(140);
         sidebar.setMaxWidth(140);
@@ -2223,6 +2594,7 @@ public class App extends Application {
         java.util.Map<String, Node> secMap = new java.util.LinkedHashMap<>();
         secMap.put("API", apiSec);
         secMap.put("人设档案", personaSec);
+        secMap.put("表情包库", imagesSec);
         secMap.put("风格指引", styleSec);
         secMap.put("更新", updateSec);
         secMap.put("引导", guideSec);
@@ -2623,7 +2995,8 @@ public class App extends Application {
                     case "R", "RIGHT", "LY" -> Conversation.Who.RIGHT;
                     default -> Conversation.Who.NARRATION;
                 };
-                convo.add(w, o.optString("text", ""), o.optString("think", ""), o.optString("time", ""));
+                convo.add(w, o.optString("text", ""), o.optString("think", ""),
+                        o.optString("time", ""), o.optString("imagePath", ""));
             }
             if (!convo.isEmpty()) {
                 for (int i = convo.turns().size() - 1; i >= 0; i--) {
@@ -2655,7 +3028,10 @@ public class App extends Application {
                     case RIGHT -> "R";
                     default -> "NARR";
                 };
-                arr.put(new JSONObject().put("who", w).put("text", t.text()).put("think", t.think()).put("time", t.time()));
+                JSONObject row = new JSONObject().put("who", w).put("text", t.text())
+                        .put("think", t.think()).put("time", t.time());
+                if (t.isImage()) row.put("imagePath", t.imagePath());
+                arr.put(row);
             }
             Files.writeString(f.toPath(), arr.toString());
         } catch (Exception ignored) {

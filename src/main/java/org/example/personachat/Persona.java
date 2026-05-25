@@ -17,11 +17,16 @@ public class Persona {
         this.skill = skillText;
     }
 
+    public String buildSystem(List<String[]> corrections, String refSnippets) {
+        return buildSystem(corrections, refSnippets, null);
+    }
+
     /**
      * @param corrections 该角色累积的纠正，每条 [被纠正的话, 哪里不对]
      * @param refSnippets 本轮检索到的真实聊天片段（可空）
+     * @param imageHint   表情包库提示：null/空 = 没图库（不准发图）；"?" = 有图但没标签；"开心, 委屈, ..." = 可选标签
      */
-    public String buildSystem(List<String[]> corrections, String refSnippets) {
+    public String buildSystem(List<String[]> corrections, String refSnippets, String imageHint) {
         StringBuilder sb = new StringBuilder();
         sb.append("""
             你现在就是%s本人，正在用手机和%s私聊。下面三引号内是你的人物设定，严格依据它来说话和思考：
@@ -39,6 +44,27 @@ public class Persona {
             - 不管聊到第几轮，你始终是%s本人，绝不跳出角色，绝不提到自己是 AI、模型或在“扮演”。
             - 每次最多两三句，别把同一个字或词无限重复刷屏，别输出乱码或没意义的长串。
             """.formatted(name, otherName, skill, name));
+
+        if (imageHint != null && !imageHint.isBlank()) {
+            sb.append("""
+
+                【发表情/图】你有自己的表情包库。想发表情/图时，**单独占一行**写：
+                  [图:标签]   或   [图:?]   （? = 随便挑一张）
+                这一行会被替换成一张真实的图气泡发出去。和文字消息一样可以混着发：
+                  好困哦
+                  [图:委屈]
+                  晚安
+                规则：
+                - 一次最多 1-2 张图，别刷屏。心情/情绪/场景需要图就发；纯陈述/正经话别发图。
+                - 标签必须从下面"可用标签"里挑；都不贴近就用 [图:?]。
+                - [图:xx] 这一行不要带任何其他字。
+                """);
+            if ("?".equals(imageHint.strip())) {
+                sb.append("可用标签：（图库里的图还没人打标签，全用 [图:?]）\n");
+            } else {
+                sb.append("可用标签：").append(imageHint).append("\n");
+            }
+        }
 
         if (refSnippets != null && !refSnippets.isBlank()) {
             sb.append("\n【你俩真实聊过的相关片段，模仿其中的语气、用词和习惯，但不要照抄】\n")

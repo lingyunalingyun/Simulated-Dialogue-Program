@@ -122,6 +122,16 @@
 .btn-ghost:pressed { -fx-background-color: btn-ghost-press-bg; }
 .btn-ghost:disabled { -fx-opacity: 0.45; }
 
+/* MenuButton 内部的 label 文字不继承 text-fill，arrow 是 Shape 用 background-color 着色，分开设 */
+.menu-button.btn-ghost > .label { -fx-text-fill: accent; }
+.menu-button.btn-ghost:hover > .label { -fx-text-fill: accent-bright; }
+.menu-button.btn-ghost > .arrow-button { -fx-background-color: transparent; }
+.menu-button.btn-ghost > .arrow-button > .arrow { -fx-background-color: accent; }
+.menu-button.btn-ghost:hover > .arrow-button > .arrow { -fx-background-color: accent-bright; }
+.menu-button.btn-ghost .context-menu { -fx-background-color: btn-ghost-bg; }
+.menu-button.btn-ghost .menu-item .label { -fx-text-fill: ink; }
+.menu-button.btn-ghost .menu-item:focused .label { -fx-text-fill: accent-bright; }
+
 .status-label { -fx-text-fill: ink-2; -fx-font-size: 12px; }
 .corpus-label { -fx-text-fill: ink-2; -fx-font-size: 11px; }
 
@@ -167,7 +177,29 @@
     -fx-font-size: 13px; -fx-font-style: italic; -fx-padding: 9 13 9 13;
     -fx-border-color: transparent; -fx-border-radius: 13; -fx-border-width: 2;
 }
-.bubble-other.linked, .bubble-self.linked, .bubble-think.linked { -fx-border-color: accent-bright; }
+.bubble-other.linked, .bubble-self.linked, .bubble-think.linked,
+.bubble-image-other.linked, .bubble-image-self.linked { -fx-border-color: accent-bright; }
+
+/* 图气泡：用气泡背景做边框/内边距，里面是 ImageView */
+.bubble-image-other {
+    -fx-background-color: bubble-other-bg; -fx-background-radius: 13;
+    -fx-padding: 6; -fx-border-color: transparent; -fx-border-radius: 13; -fx-border-width: 2;
+}
+.bubble-image-self {
+    -fx-background-color: accent; -fx-background-radius: 13;
+    -fx-padding: 6; -fx-border-color: transparent; -fx-border-radius: 13; -fx-border-width: 2;
+}
+
+/* 标签编辑器里的 chip */
+.tag-chip {
+    -fx-background-color: bubble-other-bg; -fx-text-fill: ink; -fx-background-radius: 12;
+    -fx-padding: 4 10 4 10; -fx-font-size: 12px; -fx-cursor: hand;
+    -fx-border-color: transparent; -fx-border-radius: 12; -fx-border-width: 1;
+}
+.tag-chip:selected { -fx-background-color: accent; -fx-text-fill: white; -fx-border-color: accent-bright; }
+.tag-chip:hover { -fx-border-color: accent-bright; }
+
+.muted { -fx-text-fill: bubble-think-ink; -fx-font-size: 12px; }
 
 .meta-name { -fx-font-size: 11px; -fx-text-fill: meta-name-ink; }
 .meta-time { -fx-font-size: 10px; -fx-text-fill: meta-time-ink; }
