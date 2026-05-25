@@ -35,8 +35,10 @@
 
 ## 🚀 快速开始（普通用户）
 
-1. 到 [Releases](../../releases) 下载最新的 `LanHing-VirtualChat-windows.zip`，解压。
-2. 双击 `LanHing-VirtualChat.exe` 运行（已内置运行环境，**无需安装 Java**）。
+1. 到 [Releases](../../releases) 下载最新版（任选其一）：
+   - 📦 **`LanHing-VirtualChat-x.x.x-setup.exe`** — 一键安装包（推荐，含桌面快捷方式 / 卸载）
+   - 📁 `LanHing-VirtualChat-windows.zip` — 绿色版，解压即用
+2. 安装/解压后双击 `LanHing-VirtualChat.exe` 运行（已内置运行环境，**无需安装 Java**）。
 3. 顶栏填入你的 **DeepSeek API Key** → 点「保存」。
    （去 https://platform.deepseek.com 申请，按量付费很便宜。）
 4. 准备两份人设档案 → 见下方「完整教程」。
